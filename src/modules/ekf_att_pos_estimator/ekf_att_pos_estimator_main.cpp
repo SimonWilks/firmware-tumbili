@@ -382,6 +382,7 @@ FixedwingEstimator::FixedwingEstimator() :
 	_local_pos({}),
 	_gps({}),
 	_wind({}),
+	_distance{},
 
 	_gyro_offsets({}),
 	_accel_offsets({}),
@@ -782,7 +783,7 @@ FixedwingEstimator::task_main()
 
 	while (!_task_should_exit) {
 
-		/* wait for up to 500ms for data */
+		/* wait for up to 100ms for data */
 		int pret = poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 100);
 
 		/* timed out - periodic check for _task_should_exit, etc. */
@@ -1084,7 +1085,7 @@ FixedwingEstimator::task_main()
 
 				float baro_elapsed = (_baro.timestamp - baro_last) / 1e6f;
 
-				_ekf->updateDtHgtFilt(math::constrain(baro_elapsed, 0.001f, 0.1));
+				_ekf->updateDtHgtFilt(math::constrain(baro_elapsed, 0.001f, 0.1f));
 
 				_ekf->baroHgt = _baro.altitude;
 
@@ -1369,7 +1370,7 @@ FixedwingEstimator::task_main()
 					if (newRangeData) {
 						_ekf->fuseRngData = true;
 						_ekf->useRangeFinder = true;
-						_ekf->RecallStates(_ekf->statesAtRngTime, (IMUmsec - 500.0f));
+						_ekf->RecallStates(_ekf->statesAtRngTime, (IMUmsec - 100.0f));
 						_ekf->GroundEKF();
 					}
 
