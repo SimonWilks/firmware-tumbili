@@ -263,7 +263,7 @@ int commander_main(int argc, char *argv[])
 		daemon_task = task_spawn_cmd("commander",
 					     SCHED_DEFAULT,
 					     SCHED_PRIORITY_MAX - 40,
-					     2950,
+					     3200,
 					     commander_thread_main,
 					     (argv) ? (const char **)&argv[2] : (const char **)NULL);
 
@@ -1407,8 +1407,8 @@ int commander_thread_main(int argc, char *argv[])
 			last_idle_time = system_load.tasks[0].total_runtime;
 
 			/* check if board is connected via USB */
-			//struct stat statbuf;
-			//on_usb_power = (stat("/dev/ttyACM0", &statbuf) == 0);
+			struct stat statbuf;
+			on_usb_power = (stat("/dev/ttyACM0", &statbuf) == 0);
 		}
 
 		/* if battery voltage is getting lower, warn using buzzer, etc. */
@@ -1418,7 +1418,7 @@ int commander_thread_main(int argc, char *argv[])
 			status.battery_warning = VEHICLE_BATTERY_WARNING_LOW;
 			status_changed = true;
 
-		} else if (status.condition_battery_voltage_valid && status.battery_remaining < 0.09f
+		} else if (!on_usb_power && status.condition_battery_voltage_valid && status.battery_remaining < 0.09f
 			   && !critical_battery_voltage_actions_done && low_battery_voltage_actions_done) {
 			/* critical battery voltage, this is rather an emergency, change state machine */
 			critical_battery_voltage_actions_done = true;
