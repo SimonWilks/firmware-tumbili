@@ -49,6 +49,7 @@ extern "C" __EXPORT int VtolTransitionControl(int argc, char *argv[]);
 
 // for now parameters are hardcoded
 #define GRAVITY 9.81f
+#define MASS 0.70f
 
 class VtolTransitionControl {
 public:
@@ -56,10 +57,10 @@ public:
 	~VtolTransitionControl();
 
 	// public member functions
-	void set_current_state(struct &vehicle_local_position_s pos);
-	void set_target_position(struct &vehicle_local_position_setpoint_s pos_sp);
-	void set_attitude(struct &vehicle_attitude att);
-	void get_attitude_setpoint(struct &vehicle_attitude_setpoint_s att_sp);
+	void set_current_state(struct vehicle_local_position_s &pos);
+	void set_target_position(struct vehicle_local_position_setpoint_s &pos_sp);
+	void set_attitude(struct vehicle_attitude &att);
+	void get_attitude_setpoint(struct vehicle_attitude_setpoint_s &att_sp);
 	int run_controller();
 
 private:
@@ -67,7 +68,7 @@ private:
 	struct vehicle_local_position_s _local_pos;
 	struct vehicle_local_position_setpoint_s _local_pos_sp;
 	struct vehicle_attitude_s 	_att;
-	struct vehicle_attitude_setpoint_s _app_sp;
+	struct vehicle_attitude_setpoint_s _att_sp;
 
 	math::Vector<3> _position;
 	math::Vector<3> _position_sp;
@@ -77,7 +78,7 @@ private:
 	math::Vector<3> _euler;
 
 	// main values computed
-	math::Vector<3> _q_des;
+	math::Quaternion _q_des;
 	float _thrust_des;
 
 	// provisional parameters
@@ -87,8 +88,6 @@ private:
 	// private member functions
 	void get_desired_acceleration(math::Vector<3> &acc);
 	void get_aerodynamic_force(math::Vector<3> &f);
-	void run_controller();
-
 };
 
 VtolTransitionControl::VtolTransitionControl() {
@@ -96,6 +95,15 @@ VtolTransitionControl::VtolTransitionControl() {
 	memset(&_local_pos_sp,0,sizeof(_local_pos_sp));
 	memset(&_att,0,sizeof(_att));
 	memset(&_att_sp,0,sizeof(_att_sp));
+
+	_position.zero();
+	_position_sp.zero();
+	_vel.zero();
+	_vel_sp.zero();
+	_R.identity();
+	_euler.zero();
+	_q_des.from_euler(0.0f,0.0f,0.0f);
+	_thrust_des = 0;
 
 	// initalize parameters
 	_tau_p(0) = 0.40f;
@@ -108,31 +116,31 @@ VtolTransitionControl::VtolTransitionControl() {
 }
 
 
-void VtolTransitionControl::set_current_state(struct &vehicle_local_position_s pos) {
-	memcpy(&_local_pos,pos,sizeof(_local_pos));
+void VtolTransitionControl::set_current_state(struct vehicle_local_position_s &pos) {
+	memcpy(&_local_pos,&pos,sizeof(_local_pos));
 	_position(0) = pos.y;
 	_position(1) = pos.x;
-	_position(2) = -pos.z;
+	_position(2) = pos.z;
 	_vel(0) = pos.vx;
 	_vel(1) = pos.vy;
 	_vel(2) = pos.vz;
 
 }
 
-void VtolTransitionControl::set_target_position(struct &vehicle_local_position_setpoint_s pos_sp) {
-	memcpy(&_local_pos_sp,pos_sp,sizeof(_local_pos_sp));
-	_position_sp(0) = pos_sp(0);
-	_position_sp(1) = pos_sp(1);
-	_position_sp(2) = pos_sp(2);
+void VtolTransitionControl::set_target_position(struct vehicle_local_position_setpoint_s &pos_sp) {
+	memcpy(&_local_pos_sp,&pos_sp,sizeof(_local_pos_sp));
+	_position_sp(0) = pos_sp.x;
+	_position_sp(1) = pos_sp.y;
+	_position_sp(2) = pos_sp.z;
 }
 
-void VtolTransitionControl::set_attitude(struct &vehicle_attitude att) {
-	memcpy(&_att,att,sizeof(_att));
-	_R.set(&_att.R);
+void VtolTransitionControl::set_attitude(struct vehicle_attitude &att) {
+	memcpy(&_att,&att,sizeof(_att));
+	_R.set(_att.R);
 	_euler = _R.to_euler();
 }
 
-void VtolTransitionControl::get_attitude_setpoint(struct &vehicle_attitude_setpoint_s att_sp) {
+void VtolTransitionControl::get_attitude_setpoint(struct vehicle_attitude_setpoint_s &att_sp) {
 
 }
 
@@ -164,30 +172,26 @@ int VtolTransitionControl::run_controller() {
 	math::Vector<3> a_des;
 	get_desired_acceleration(a_des);
 
-	// compute desired body z azis
-	math::Vector<3> zb_des = a_des;
-	zb_des.normalize();
-
 	// substract estimated aerodynamic acceleration
 	math::Vector<3> f_air;
 	get_aerodynamic_force(f_air);
-	a_des = a_des - (_R*f_air)/_params.m;
+	a_des = a_des - (_R*f_air)/MASS;
 
 	// constrain acceleration to never be negative along body z axis
 	a_des = _R*a_des;
 	a_des(2) = a_des(2) < 0.1f ? 0.1f : a_des(2);
-	a_des = R.transpose()*a_des;
+	a_des = _R.transposed()*a_des;
 
 	// compute desired yaw
-	Vector<3> v_global = _R.transpose()*_vel;
-
-	if(v_global(0)*v_global(0) + v_global(1)*v_global(1) > 0.1) { // are we moving in the ground plane?
-		float yaw_des = atan2f(_vel(1),_vel(0)) - M_PI_2;
+	math::Vector<3> v_global = _R.transposed()*_vel;
+	float yaw_des;
+	if(v_global(0)*v_global(0) + v_global(1)*v_global(1) > 0.1f) { // are we moving in the ground plane?
+		yaw_des = atan2f(_vel(1),_vel(0)) - M_PI_2_F;
 		float yaw_diff = yaw_des - _euler(2);
-		while (yaw_diff > M_PI) { yaw_diff = yaw_diff - 2.0f*M_PI;}
-		while (yaw_diff < -M_PI) {yaw_diff = yaw_diff + 2.0f*pi;}
-		if (fabsf(yaw_diff) > M_PI_2) {
-			yaw_des = yaw_des > 0.0f ? yaw_des - M_PI : yaw_des + pi;
+		while (yaw_diff > M_PI_F) { yaw_diff = yaw_diff - 2.0f*M_PI_F;}
+		while (yaw_diff < -M_PI_F) {yaw_diff = yaw_diff + 2.0f*M_PI_F;}
+		if (fabsf(yaw_diff) > M_PI_2_F) {
+			yaw_des = yaw_des > 0.0f ? yaw_des - M_PI_F : yaw_des + M_PI_F;
 		}
 	}
 	else {
@@ -198,20 +202,22 @@ int VtolTransitionControl::run_controller() {
 	math::Quaternion q_yaw;
 	q_yaw.from_euler(0.0f,0.0f,yaw_des);
 	math::Matrix<3,3> R_yaw = q_yaw.to_dcm();
-	float a_des_yaw = R_yaw*a_des;
+	math::Vector<3> a_des_yaw = R_yaw*a_des;
 
 	// compute desired rotation angle
 	math::Vector<3> zb_des = a_des_yaw.normalized();
 	math::Vector<3> zi = {0.0f,0.0f,1.0f};
 	float inner_prod = zi*zb_des;
 	inner_prod = math::constrain(inner_prod,-1.0f,1.0f);
-	float alpha = math::acosf(inner_prod);
+	float alpha = acosf(inner_prod);
 
 	math::Vector<3> rot_axis;
 	// if our heading is more or less correct, only rotate around pitch to ensure we fly with roll ~= 0
 	// this probably needs tuning
-	if (fabsf(alpha) < 0.0001 || fabsf(alpha + M_PI) < 0.0001 || fabsf(alpha - M_PI) < 0.0001) {
-		rot_axis.set({0.0f,1.0f,0.0f});
+	if (fabsf(alpha) < 0.0001f || fabsf(alpha + M_PI_F) < 0.0001f || fabsf(alpha - M_PI_F) < 0.0001f) {
+		rot_axis(0) = 0.0f;
+		rot_axis(1) = 1.0f;
+		rot_axis(2) = 0.0f;
 	}
 	else {
 		rot_axis = zi%zb_des;
@@ -229,10 +235,12 @@ int VtolTransitionControl::run_controller() {
 	_q_des = q_xy*q_yaw;	// combine the two rotations
 
 	// rotate body z-axis to global frame
-	zb_des = R_yaw.transpose()*zb_des;
+	zb_des = R_yaw.transposed()*zb_des;
 
 	// compute desired thrust (project desired to actual axis)
-	math::Vector<3> zb = _R.transpose()*zi;
+	math::Vector<3> zb = _R.transposed()*zi;
 	_thrust_des = zb*zb_des;
-	_thrust_des *= _params.m*a_des.length(); // this is a force!
+	_thrust_des *= MASS*a_des.length(); // this is a force!
+
+	return 0;
 }
