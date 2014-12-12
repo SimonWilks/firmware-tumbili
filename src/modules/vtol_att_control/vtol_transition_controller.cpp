@@ -63,8 +63,8 @@ VtolTransitionControl::VtolTransitionControl() {
 
 void VtolTransitionControl::set_current_position(struct vehicle_local_position_s &pos) {
 	memcpy(&_local_pos,&pos,sizeof(_local_pos));
-	_position(0) = pos.y;
-	_position(1) = pos.x;
+	_position(0) = pos.x;
+	_position(1) = pos.y;
 	_position(2) = pos.z;
 	_vel(0) = pos.vx;
 	_vel(1) = pos.vy;
@@ -90,14 +90,14 @@ void VtolTransitionControl::get_attitude_setpoint(struct vehicle_attitude_setpoi
 }
 
 bool VtolTransitionControl::is_initialized() {
-	return !_initialized;
+	return _initialized;
 }
 
 void VtolTransitionControl::initialize(struct vehicle_local_position_s &pos) {
-	_local_pos_sp.x = cosf(_att.yaw)*L;
-	_local_pos_sp.y = sinf(_att.yaw)*L;
-	_local_pos_sp.z -= H;	// z axis points down
-	_local_pos_sp.yaw = _att.yaw;
+	_position_sp.x = cosf(_att.yaw)*L;
+	_position_sp.y = sinf(_att.yaw)*L;
+	_position_sp.z -= H;	// z axis points down
+	_position_sp.yaw = _att.yaw;
 	_initialized = true;
 }
 
@@ -119,8 +119,8 @@ void VtolTransitionControl::get_desired_acceleration(math::Vector<3> &acc) {
 			- 1/(_tau_p(i)*_tau_p(i))*pos_error(i);
 	}
 
-	// add gravity
-	acc(2) += GRAVITY;
+	// substract gravity (z axis points down)
+	acc(2) -= GRAVITY;
 }
 
 void VtolTransitionControl::get_aerodynamic_force(math::Vector<3> &f) {
@@ -138,16 +138,15 @@ int VtolTransitionControl::run_controller() {
 	get_aerodynamic_force(f_air);
 	a_des = a_des - (_R*f_air)/MASS;
 
-	// constrain acceleration to never be negative along body z axis
+	// constrain acceleration to never be positive along body z axis (z axis points down)
 	a_des = _R*a_des;
-	a_des(2) = a_des(2) < 0.1f ? 0.1f : a_des(2);
+	a_des(2) = a_des(2) > -0.1f ? -0.1f : a_des(2);
 	a_des = _R.transposed()*a_des;
 
 	// compute desired yaw
-	math::Vector<3> v_global = _R.transposed()*_vel;
 	float yaw_des;
-	if(v_global(0)*v_global(0) + v_global(1)*v_global(1) > 0.1f) { // are we moving in the ground plane?
-		yaw_des = atan2f(_vel(1),_vel(0)) - M_PI_2_F;
+	if(_vel(0)*_vel(0) + _vel(1)*_vel(1) > 0.5f) { // are we moving in the ground plane?
+		yaw_des = atan2f(_vel(1),_vel(0));
 		float yaw_diff = yaw_des - _euler(2);
 		while (yaw_diff > M_PI_F) { yaw_diff = yaw_diff - 2.0f*M_PI_F;}
 		while (yaw_diff < -M_PI_F) {yaw_diff = yaw_diff + 2.0f*M_PI_F;}
@@ -167,7 +166,7 @@ int VtolTransitionControl::run_controller() {
 
 	// compute desired rotation angle
 	math::Vector<3> zb_des = a_des_yaw.normalized();
-	math::Vector<3> zi = {0.0f,0.0f,1.0f};
+	math::Vector<3> zi = {0.0f,0.0f,-1.0f};
 	float inner_prod = zi*zb_des;
 	inner_prod = math::constrain(inner_prod,-1.0f,1.0f);
 	float alpha = acosf(inner_prod);
