@@ -64,7 +64,7 @@
 #include <uORB/topics/vtol_vehicle_status.h>
 #include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/parameter_update.h>
-#include <uORB/topics/sensor_combined.h>
+#include <uORB/topics/vehicle_local_position.h>
 #include <systemlib/param/param.h>
 #include <systemlib/err.h>
 #include <systemlib/perf_counter.h>
@@ -80,6 +80,11 @@
 #include <nuttx/mtd.h>
 
 #include <fcntl.h>
+
+#define thrust_to_force 14.0f
+#define m 				0.70f
+#define g 				9.81f
+#define baro_filt_param 0.98f
 
 
 extern "C" __EXPORT int vtol_att_control_main(int argc, char *argv[]);
@@ -108,7 +113,7 @@ private:
 	int		_params_sub;			//parameter updates subscription
 	int		_manual_control_sp_sub;	//manual control setpoint subscription
 	int		_armed_sub;				//arming status subscription
-	int 	_sensor_combined_sub;	// sensor subscription
+	int 	_local_pos_sub;	// sensor subscription
 
 	int 	_actuator_inputs_mc;	//topic on which the mc_att_controller publishes actuator inputs
 	int 	_actuator_inputs_fw;	//topic on which the fw_att_controller publishes actuator inputs
@@ -132,7 +137,7 @@ private:
 	struct actuator_controls_s			_actuators_mc_in;	//actuator controls from mc_att_control
 	struct actuator_controls_s			_actuators_fw_in;	//actuator controls from fw_att_control
 	struct actuator_armed_s				_armed;				//actuator arming status
-	struct sensor_combined_s 			_sensors;			// sensor values
+	struct vehicle_local_position_s		_local_pos;
 	struct {
 		param_t idle_pwm_mc;	//pwm value for idle in mc mode
 		param_t vtol_motor_count;
@@ -152,12 +157,22 @@ private:
 	unsigned _motor_count;	// number of motors
 
 	// simple thrust controller
-	bool _control_thrust;
+	float _alt_init;
+	float _thrust_init;
+	bool _control_height;
 	float _desired_height;
 	float thrust_ctrl_low_bound;
 	float thrust_ctrl_high_bound;
+	math::Matrix<2,2> _A_cl;			// closed loop LQG state matrix
+	math::Vector<2> _B;			// closed loop LQG reference input matrix
+	math::Vector<2> _K;				// Kalman gain
+	math::Vector<2> _x_last;			// previous LQG state
+	math::Vector<2> _x_next;			// next LQG state
 
-
+	float _u;	// input
+	float _baro_old;
+	float _baro_filt;
+	
 //*****************Member functions***********************************************************************
 
 	void 		task_main();	//main task
@@ -170,7 +185,7 @@ private:
 	void 		actuator_controls_fw_poll();	//Check for changes in fw_attitude_control output
 	void 		vehicle_rates_sp_mc_poll();
 	void 		vehicle_rates_sp_fw_poll();
-	void 		vehicle_sensor_poll();			// Check for changes in sensor values
+	void 		vehicle_local_pos_poll();			// Check for changes in sensor values
 	void 		parameters_update_poll();		//Check if parameters have changed
 	int 		parameters_update();			//Update local paraemter cache
 	void  		fill_mc_att_control_output();	//write mc_att_control results to actuator message
@@ -203,7 +218,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_params_sub(-1),
 	_manual_control_sp_sub(-1),
 	_armed_sub(-1),
-	_sensor_combined_sub(-1),
+	_local_pos_sub(-1),
 	//init publication handlers
 	_actuators_0_pub(-1),
 	_actuators_1_pub(-1),
@@ -230,13 +245,32 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	memset(&_actuators_mc_in, 0, sizeof(_actuators_mc_in));
 	memset(&_actuators_fw_in, 0, sizeof(_actuators_fw_in));
 	memset(&_armed, 0, sizeof(_armed));
-	memset(&_sensors,0,sizeof(_sensors));
+	memset(&_local_pos,0,sizeof(_local_pos));
 
 	_params.idle_pwm_mc = PWM_LOWEST_MIN;
 	_params.vtol_motor_count = 0;
 
 	_params_handles.idle_pwm_mc = param_find("IDLE_PWM_MC");
 	_params_handles.vtol_motor_count = param_find("VTOL_MOT_COUNT");
+
+	// init LQG
+	_A_cl(0,0) = 0.7739;
+	_A_cl(1,0) = -1.3430;
+	_A_cl(0,1) = 0.0096;
+	_A_cl(1,1) = 0.9224;
+	
+	_B(0) = 0.2254;
+	_B(1) = 1.1989;
+
+	_K(0) = 10.0897;
+	_K(1) = 5.4323;
+
+	_u = 0;
+	_alt_init = 0;
+	_thrust_init = 0;
+	_control_height = false;
+	thrust_ctrl_high_bound = 0.8;
+	thrust_ctrl_low_bound = 0.2;
 
 	/* fetch initial parameter values */
 	parameters_update();
@@ -386,14 +420,14 @@ VtolAttitudeControl::parameters_update_poll()
 * Check for sensor updates.
 */
 void
-VtolAttitudeControl::vehicle_sensor_poll()
+VtolAttitudeControl::vehicle_local_pos_poll()
 {
 	bool updated;
 	/* Check if parameters have changed */
-	orb_check(_sensor_combined_sub, &updated);
+	orb_check(_local_pos_sub, &updated);
 
 	if (updated) {
-		orb_copy(ORB_ID(sensor_combined), _sensor_combined_sub , &_sensors);
+		orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub , &_local_pos);
 	}
 
 }
@@ -524,9 +558,15 @@ void VtolAttitudeControl::set_idle_mc()
 	close(fd);
 }
 
-void VtolAttitudeControl::control_thrust {
-
-
+void VtolAttitudeControl::control_thrust() {
+	_desired_height = _alt_init;
+	// move desired height
+	float climb_rate = (_manual_control_sp.z - _thrust_init)*3;
+	_desired_height += climb_rate * 0.01f;
+	_x_next = _A_cl * _x_last + _B * (_desired_height - (-_local_pos.z));
+	_x_last = _x_next;	// update state
+	_u = (_K * _x_next)/(thrust_to_force)*m + _thrust_init;
+	_u = math::constrain(_u,_thrust_init - 0.2f,0.7f);
 }
 
 void
@@ -549,7 +589,7 @@ void VtolAttitudeControl::task_main()
 	_params_sub            = orb_subscribe(ORB_ID(parameter_update));
 	_manual_control_sp_sub = orb_subscribe(ORB_ID(manual_control_setpoint));
 	_armed_sub             = orb_subscribe(ORB_ID(actuator_armed));
-	_sensor_combined_sub   = orb_subscribe(ORB_ID(sensor_combined));
+	_local_pos_sub   = orb_subscribe(ORB_ID(vehicle_local_position));
 
 	_actuator_inputs_mc    = orb_subscribe(ORB_ID(actuator_controls_virtual_mc));
 	_actuator_inputs_fw    = orb_subscribe(ORB_ID(actuator_controls_virtual_fw));
@@ -614,7 +654,9 @@ void VtolAttitudeControl::task_main()
 		vehicle_rates_sp_mc_poll();
 		vehicle_rates_sp_fw_poll();
 		parameters_update_poll();
-		vehicle_sensor_poll();			// Check for new sensor values
+		vehicle_local_pos_poll();			// Check for new sensor values
+
+		static uint64_t last_run = 0;
 
 		if (_manual_control_sp.aux1 <= 0.0f) {		/* vehicle is in mc mode */
 			_vtol_vehicle_status.vtol_in_rw_mode = true;
@@ -628,19 +670,32 @@ void VtolAttitudeControl::task_main()
 			if (fds[0].revents & POLLIN) {
 				vehicle_manual_poll();	/* update remote input */
 				orb_copy(ORB_ID(actuator_controls_virtual_mc), _actuator_inputs_mc, &_actuators_mc_in);
-
 				// run simple thrust controller if user wants to
-				if(_manual_control_sp.aux2 > 0.0f && _control_height == false) {
+				if(_manual_control_sp.aux2 > 0.0f && _control_height == false && _local_pos.z_valid) {
 					// user wants thrust to be controller, check if possible
-					if (thrust_ctrl_low_bound <= _manual_control_sp.z <= thrust_ctrl_high_bound) {
+					if (thrust_ctrl_low_bound <= _manual_control_sp.z && _manual_control_sp.z <= thrust_ctrl_high_bound) {
 						_thrust_init = _manual_control_sp.z;	// thrust which corresponds to current altitude
-						_alt_init = 
+						_alt_init = -_local_pos.z;
 						_control_height = true;
+						_x_last(0) = 0;
+						_x_last(1) = 0;
+						last_run = hrt_absolute_time();
+						control_thrust();	// control first time
+					}
+					else {
+						_control_height = false;
 					}
 				}
+				else if(_manual_control_sp.aux2 < 0.0f) {
+					_control_height = false;
+				}
+				
 				if(_control_height) {
-
-					control_thrust();
+					if((hrt_absolute_time() - last_run)/1000000.0f >= 0.01f) {
+						last_run = hrt_absolute_time();
+						control_thrust();
+					}
+					_actuators_mc_in.control[3] = _u;
 				}
 
 				fill_mc_att_control_output();
