@@ -31,70 +31,15 @@
  *
  ****************************************************************************/
 
-/**
- * Vtol transition controller
- *
- * @author Roman Bapst 		<bapstr@ethz.ch>
- * 
- */
-
- #include <uORB/topics/vehicle_local_position.h>
- #include <uORB/topics/vehicle_local_position_setpoint.h>
- #include <uORB/topics/vehicle_attitude.h>
- #include <uORB/topics/vehicle_attitude_setpoint.h>
- #include <lib/mathlib/mathlib.h>
- #include <math.h>
-
-extern "C" __EXPORT int VtolTransitionControl(int argc, char *argv[]);
-
-// for now parameters are hardcoded
-#define GRAVITY 9.81f
-#define MASS 0.70f
-
-class VtolTransitionControl {
-public:
-	VtolTransitionControl();
-	~VtolTransitionControl();
-
-	// public member functions
-	void set_current_state(struct vehicle_local_position_s &pos);
-	void set_target_position(struct vehicle_local_position_setpoint_s &pos_sp);
-	void set_attitude(struct vehicle_attitude &att);
-	void get_attitude_setpoint(struct vehicle_attitude_setpoint_s &att_sp);
-	int run_controller();
-
-private:
-	// data containers
-	struct vehicle_local_position_s _local_pos;
-	struct vehicle_local_position_setpoint_s _local_pos_sp;
-	struct vehicle_attitude_s 	_att;
-	struct vehicle_attitude_setpoint_s _att_sp;
-
-	math::Vector<3> _position;
-	math::Vector<3> _position_sp;
-	math::Vector<3> _vel;
-	math::Vector<3> _vel_sp;
-	math::Matrix<3,3> _R;
-	math::Vector<3> _euler;
-
-	// main values computed
-	math::Quaternion _q_des;
-	float _thrust_des;
-
-	// provisional parameters
-	math::Vector<3> _tau_p;
-	math::Vector<3> _zeta_p;
-	
-	// private member functions
-	void get_desired_acceleration(math::Vector<3> &acc);
-	void get_aerodynamic_force(math::Vector<3> &f);
-};
+#include "vtol_transition_controller.h"
 
 VtolTransitionControl::VtolTransitionControl() {
 	memset(&_local_pos,0,sizeof(_local_pos));
 	memset(&_local_pos_sp,0,sizeof(_local_pos_sp));
 	memset(&_att,0,sizeof(_att));
 	memset(&_att_sp,0,sizeof(_att_sp));
+
+	_initialized = false;
 
 	_position.zero();
 	_position_sp.zero();
@@ -116,7 +61,7 @@ VtolTransitionControl::VtolTransitionControl() {
 }
 
 
-void VtolTransitionControl::set_current_state(struct vehicle_local_position_s &pos) {
+void VtolTransitionControl::set_current_position(struct vehicle_local_position_s &pos) {
 	memcpy(&_local_pos,&pos,sizeof(_local_pos));
 	_position(0) = pos.y;
 	_position(1) = pos.x;
@@ -134,7 +79,7 @@ void VtolTransitionControl::set_target_position(struct vehicle_local_position_se
 	_position_sp(2) = pos_sp.z;
 }
 
-void VtolTransitionControl::set_attitude(struct vehicle_attitude &att) {
+void VtolTransitionControl::set_attitude(struct vehicle_attitude_s &att) {
 	memcpy(&_att,&att,sizeof(_att));
 	_R.set(_att.R);
 	_euler = _R.to_euler();
@@ -142,6 +87,22 @@ void VtolTransitionControl::set_attitude(struct vehicle_attitude &att) {
 
 void VtolTransitionControl::get_attitude_setpoint(struct vehicle_attitude_setpoint_s &att_sp) {
 
+}
+
+bool VtolTransitionControl::is_initialized() {
+	return !_initialized;
+}
+
+void VtolTransitionControl::initialize(struct vehicle_local_position_s &pos) {
+	_local_pos_sp.x = cosf(_att.yaw)*L;
+	_local_pos_sp.y = sinf(_att.yaw)*L;
+	_local_pos_sp.z -= H;	// z axis points down
+	_local_pos_sp.yaw = _att.yaw;
+	_initialized = true;
+}
+
+void VtolTransitionControl::deinitialize() {
+	_initialized = false;
 }
 
 void VtolTransitionControl::get_desired_acceleration(math::Vector<3> &acc) {
@@ -243,4 +204,25 @@ int VtolTransitionControl::run_controller() {
 	_thrust_des *= MASS*a_des.length(); // this is a force!
 
 	return 0;
+}
+
+void VtolTransitionControl::write_att_sp(struct vehicle_attitude_setpoint_s &att_sp) {
+	math::Matrix<3,3> R_sp = _q_des.to_dcm();
+	math::Vector<3> euler = R_sp.to_euler();
+	att_sp.R_body[0][0] = R_sp(0,0);
+	att_sp.R_body[0][1] = R_sp(0,1);
+	att_sp.R_body[0][2] = R_sp(0,2);
+	att_sp.R_body[1][0] = R_sp(1,0);
+	att_sp.R_body[1][1] = R_sp(1,1);
+	att_sp.R_body[1][2] = R_sp(1,2);
+	att_sp.R_body[2][0] = R_sp(2,0);
+	att_sp.R_body[2][1] = R_sp(2,1);
+	att_sp.R_body[2][2] = R_sp(2,2);
+	att_sp.R_valid = true;
+
+	att_sp.roll_body = euler(0);
+	att_sp.pitch_body = euler(1);
+	att_sp.yaw_body = euler(2);
+
+	att_sp.thrust = math::constrain(_thrust_des*THRUST_SCALING,0.4f,0.7f);	// limit this for now
 }

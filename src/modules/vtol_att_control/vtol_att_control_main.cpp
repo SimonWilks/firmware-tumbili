@@ -74,6 +74,8 @@
 #include <lib/mathlib/mathlib.h>
 #include <lib/geo/geo.h>
 
+#include "vtol_transition_controller.h"
+
 #include "drivers/drv_pwm_output.h"
 #include <nuttx/fs/nxffs.h>
 #include <nuttx/fs/ioctl.h>
@@ -120,6 +122,7 @@ private:
 	orb_advert_t 	_actuators_1_pub;
 	orb_advert_t	_vtol_vehicle_status_pub;
 	orb_advert_t	_v_rates_sp_pub;
+	orb_advert_t  	_att_sp_pub;
 //*******************data containers***********************************************************
 	struct vehicle_attitude_s			_v_att;				//vehicle attitude
 	struct vehicle_attitude_setpoint_s	_v_att_sp;			//vehicle attitude setpoint
@@ -136,6 +139,7 @@ private:
 	struct actuator_armed_s				_armed;				//actuator arming status
 	struct airspeed_s 					_airspeed;			// airspeed
 	struct vehicle_local_position_s 	_local_pos;			// vehicle local position
+	struct vehicle_local_position_setpoint_s _local_pos_sp; // vehicle local position setpoint
 
 	struct {
 		param_t idle_pwm_mc;	//pwm value for idle in mc mode
@@ -162,6 +166,8 @@ private:
 	bool flag_idle_mc;		//false = "idle is set for fixed wing mode"; true = "idle is set for multicopter mode"
 	unsigned _motor_count;	// number of motors
 
+	VtolTransitionControl *_transition_controller;
+
 //*****************Member functions***********************************************************************
 
 	void 		task_main();	//main task
@@ -176,6 +182,7 @@ private:
 	void 		vehicle_rates_sp_fw_poll();
 	void 		vehicle_airspeed_poll();		// Check for changes in airspeed
 	void 		parameters_update_poll();		//Check if parameters have changed
+	void 		vehicle_local_pos_poll();		// Check for changes in local position
 	int 		parameters_update();			//Update local paraemter cache
 	void  		fill_mc_att_control_output();	//write mc_att_control results to actuator message
 	void		fill_fw_att_control_output();	//write fw_att_control results to actuator message
@@ -215,12 +222,15 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_actuators_1_pub(-1),
 	_vtol_vehicle_status_pub(-1),
 	_v_rates_sp_pub(-1),
+	_att_sp_pub(-1),
 
 	_loop_perf(perf_alloc(PC_ELAPSED, "mc_att_control")),
 	_nonfinite_input_perf(perf_alloc(PC_COUNT, "vtol att control nonfinite input"))
 {
 
 	flag_idle_mc = true;
+
+	_transition_controller = new VtolTransitionControl;
 
 	memset(& _vtol_vehicle_status, 0, sizeof(_vtol_vehicle_status));
 	_vtol_vehicle_status.vtol_in_rw_mode = true;	/* start vtol in rotary wing mode*/
@@ -239,6 +249,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	memset(&_armed, 0, sizeof(_armed));
 	memset(&_airspeed,0,sizeof(_airspeed));
 	memset(&_local_pos,0,sizeof(_local_pos));
+	memset(&_local_pos_sp,0,sizeof(_local_pos_sp));
 
 	_params.idle_pwm_mc = PWM_LOWEST_MIN;
 	_params.vtol_motor_count = 0;
@@ -397,7 +408,7 @@ VtolAttitudeControl::vehicle_local_pos_poll() {
 	orb_check(_local_pos_sub, &updated);
 
 	if (updated) {
-		orb_copy(ORB_ID(vehicle_local_position), _loca_pos_sub , &_local_pos);
+		orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub , &_local_pos);
 	}
 }
 
@@ -685,9 +696,27 @@ void VtolAttitudeControl::task_main()
 				flag_idle_mc = true;
 			}
 
-			// Check if we should run position controller for transition maneuver
-			if (_manual_control_sp.posctl_switch == SWITCH_POS_ON && ) {
+			// Check if we should run transition controller for transition maneuver
+			if (_manual_control_sp.posctl_switch == SWITCH_POS_ON && (fds[3].revents & POLLIN) && _local_pos.z_valid) {
+				if(!_transition_controller->is_initialized()) {
+					_transition_controller->initialize(_local_pos);
+				}
+				_transition_controller->set_current_position(_local_pos);
+				_transition_controller->set_attitude(_v_att);
+				_transition_controller->run_controller();
+				_transition_controller->write_att_sp(_v_att_sp);
 
+				// publish desired attitude and thrust
+				if (_att_sp_pub > 0) {
+					orb_publish(ORB_ID(vehicle_attitude_setpoint), _att_sp_pub, &_v_att_sp);
+
+				} else {
+					_att_sp_pub = orb_advertise(ORB_ID(vehicle_attitude_setpoint), &_v_att_sp);
+				}
+
+			}
+			else {
+				_transition_controller->deinitialize();
 			}
 
 			/* got data from mc_att_controller */

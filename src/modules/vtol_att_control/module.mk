@@ -38,4 +38,5 @@
 MODULE_COMMAND	= vtol_att_control
 
 SRCS		= vtol_att_control_main.cpp \
+			  vtol_transition_controller.cpp \
 			  vtol_att_control_params.c
