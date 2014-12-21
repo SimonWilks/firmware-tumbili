@@ -179,9 +179,7 @@ private:
 	math::Vector<2> _x_next;			// next LQG state
 
 	float _u;	// input
-	float _baro_old;
-	float _baro_filt;
-	
+
 //*****************Member functions***********************************************************************
 
 	void 		task_main();	//main task
@@ -277,7 +275,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_A_cl(1,0) = -1.3430;
 	_A_cl(0,1) = 0.0096;
 	_A_cl(1,1) = 0.9224;
-	
+
 	_B(0) = 0.2254;
 	_B(1) = 1.1989;
 
@@ -609,7 +607,7 @@ void VtolAttitudeControl::control_thrust() {
 	_desired_height += climb_rate * 0.01f;
 	// if we move to fast up move altitude setpoint
 	if(_local_pos.vz < -1) {
-		_desired_height = -_local_pos.z + 0.5f;
+		_desired_height = -_local_pos.z - 0.3f;
 	}
 
 	_x_next = _A_cl * _x_last + _B * (_desired_height - (-_local_pos.z));
@@ -784,7 +782,7 @@ void VtolAttitudeControl::task_main()
 			if (fds[0].revents & POLLIN) {
 				vehicle_manual_poll();	/* update remote input */
 				orb_copy(ORB_ID(actuator_controls_virtual_mc), _actuator_inputs_mc, &_actuators_mc_in);
-				
+
 				control_thrust_on_demand();
 				// scale pitch control with airspeed
 				scale_mc_output();
