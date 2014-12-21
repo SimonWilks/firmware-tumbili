@@ -84,8 +84,6 @@
 #define thrust_to_force 14.0f
 #define m 				0.70f
 #define g 				9.81f
-#define baro_filt_param 0.98f
-
 
 extern "C" __EXPORT int vtol_att_control_main(int argc, char *argv[]);
 
@@ -194,6 +192,7 @@ private:
 	void 		fill_fw_att_rates_sp();
 	void 		set_idle_fw();
 	void 		set_idle_mc();
+	void 		control_thrust_on_demand();
 	void 		control_thrust();				// simple thrust controller for take-off aid
 };
 
@@ -559,14 +558,50 @@ void VtolAttitudeControl::set_idle_mc()
 }
 
 void VtolAttitudeControl::control_thrust() {
-	_desired_height = _alt_init;
 	// move desired height
-	float climb_rate = (_manual_control_sp.z - _thrust_init)*3;
+	float climb_rate = (_manual_control_sp.z - 0.5);
 	_desired_height += climb_rate * 0.01f;
+	// if we move to fast up move altitude setpoint
+	if(_local_pos.vz < -1) {
+		_desired_height = -_local_pos.z + 0.5;
+	}
+
 	_x_next = _A_cl * _x_last + _B * (_desired_height - (-_local_pos.z));
 	_x_last = _x_next;	// update state
 	_u = (_K * _x_next)/(thrust_to_force)*m + _thrust_init;
-	_u = math::constrain(_u,_thrust_init - 0.2f,0.7f);
+	_u = math::constrain(_u,_thrust_init - 0.15f,0.7f);
+}
+
+void VtolAttitudeControl::control_thrust_on_demand() {
+	static uint64_t last_run = 0;
+	// run simple thrust controller if user wants to
+	if(_manual_control_sp.aux2 > 0.0f && _control_height == false && _local_pos.z_valid) {
+		// user wants thrust to be controller, check if possible
+		if (thrust_ctrl_low_bound <= _manual_control_sp.z && _manual_control_sp.z <= thrust_ctrl_high_bound) {
+			_thrust_init = _manual_control_sp.z;	// thrust which corresponds to current altitude
+			_alt_init = -_local_pos.z;
+			_desired_height = _alt_init;
+			_control_height = true;
+			_x_last(0) = 0;
+			_x_last(1) = 0;
+			last_run = hrt_absolute_time();
+			control_thrust();	// control first time
+		}
+		else {
+			_control_height = false;
+		}
+	}
+	else if(_manual_control_sp.aux2 < 0.0f) {
+		_control_height = false;
+	}
+
+	if(_control_height) {
+		if((hrt_absolute_time() - last_run)/1000000.0f >= 0.01f) {
+			last_run = hrt_absolute_time();
+			control_thrust();
+		}
+		_actuators_mc_in.control[3] = _u;
+	}
 }
 
 void
@@ -656,7 +691,6 @@ void VtolAttitudeControl::task_main()
 		parameters_update_poll();
 		vehicle_local_pos_poll();			// Check for new sensor values
 
-		static uint64_t last_run = 0;
 
 		if (_manual_control_sp.aux1 <= 0.0f) {		/* vehicle is in mc mode */
 			_vtol_vehicle_status.vtol_in_rw_mode = true;
@@ -670,33 +704,8 @@ void VtolAttitudeControl::task_main()
 			if (fds[0].revents & POLLIN) {
 				vehicle_manual_poll();	/* update remote input */
 				orb_copy(ORB_ID(actuator_controls_virtual_mc), _actuator_inputs_mc, &_actuators_mc_in);
-				// run simple thrust controller if user wants to
-				if(_manual_control_sp.aux2 > 0.0f && _control_height == false && _local_pos.z_valid) {
-					// user wants thrust to be controller, check if possible
-					if (thrust_ctrl_low_bound <= _manual_control_sp.z && _manual_control_sp.z <= thrust_ctrl_high_bound) {
-						_thrust_init = _manual_control_sp.z;	// thrust which corresponds to current altitude
-						_alt_init = -_local_pos.z;
-						_control_height = true;
-						_x_last(0) = 0;
-						_x_last(1) = 0;
-						last_run = hrt_absolute_time();
-						control_thrust();	// control first time
-					}
-					else {
-						_control_height = false;
-					}
-				}
-				else if(_manual_control_sp.aux2 < 0.0f) {
-					_control_height = false;
-				}
 				
-				if(_control_height) {
-					if((hrt_absolute_time() - last_run)/1000000.0f >= 0.01f) {
-						last_run = hrt_absolute_time();
-						control_thrust();
-					}
-					_actuators_mc_in.control[3] = _u;
-				}
+				control_thrust_on_demand();
 
 				fill_mc_att_control_output();
 				fill_mc_att_rates_sp();
