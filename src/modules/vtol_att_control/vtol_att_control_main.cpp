@@ -559,11 +559,11 @@ void VtolAttitudeControl::set_idle_mc()
 
 void VtolAttitudeControl::control_thrust() {
 	// move desired height
-	float climb_rate = (_manual_control_sp.z - 0.5);
+	float climb_rate = (_manual_control_sp.z - 0.5f);
 	_desired_height += climb_rate * 0.01f;
 	// if we move to fast up move altitude setpoint
 	if(_local_pos.vz < -1) {
-		_desired_height = -_local_pos.z + 0.5;
+		_desired_height = -_local_pos.z + 0.5f;
 	}
 
 	_x_next = _A_cl * _x_last + _B * (_desired_height - (-_local_pos.z));
