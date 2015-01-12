@@ -801,7 +801,9 @@ void VtolAttitudeControl::task_main()
 
 				control_thrust_on_demand();
 				// scale pitch control with airspeed
-				scale_mc_output();
+				if(_airspeed.true_airspeed_m_s > 13.0f) {
+					scale_mc_output();
+				}
 
 				fill_mc_att_control_output();
 				fill_mc_att_rates_sp();
