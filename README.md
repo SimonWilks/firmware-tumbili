@@ -1,4 +1,4 @@
-## PX4 Aerial Middleware and Flight Control Stack ##
+## PX4 Flight Control Stack and Middleware ##
 
 [![Build Status](https://travis-ci.org/PX4/Firmware.svg?branch=master)](https://travis-ci.org/PX4/Firmware)
 
@@ -6,9 +6,35 @@
 
 *   Official Website: http://px4.io
 *   License: BSD 3-clause (see LICENSE.md)
-*   Supported airframes:
-  * Multicopters
-  * Fixed wing
+*   Supported airframes (more experimental are supported):
+  * [Multicopters](http://px4.io/platforms/multicopters/start)
+  * [Fixed wing](http://px4.io/platforms/planes/start)
+  * [VTOL](http://px4.io/platforms/vtol/start)
 *   Binaries (always up-to-date from master):
-  * [Downloads](https://pixhawk.org/downloads)
+  * [Downloads](http://px4.io/downloads)
 *   Mailing list: [Google Groups](http://groups.google.com/group/px4users)
+
+### Users ###
+
+Please refer to the [user documentation](https://pixhawk.org/users/start) for flying drones with the PX4 flight stack.
+
+### Developers ###
+
+Contributing guide:
+http://px4.io/dev/contributing
+
+Developer guide:
+http://px4.io/dev/
+
+Testing guide:
+http://px4.io/dev/unit_tests
+
+This repository contains code supporting these boards:
+  * FMUv1.x
+  * FMUv2.x
+  * AeroCore (v1 and v2)
+
+## NuttShell (NSH) ##
+
+NSH usage documentation:
+http://px4.io/users/serial_connection

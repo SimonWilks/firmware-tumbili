@@ -126,8 +126,8 @@ private:
 	orb_advert_t	_v_rates_sp_pub;		/**< rate setpoint publication */
 	orb_advert_t	_actuators_0_pub;		/**< attitude actuator controls publication */
 
-	orb_id_t _rates_sp_id;	// pointer to correct rates setpoint uORB metadata structure
-	orb_id_t _actuators_id;	// pointer to correct actuator controls0 uORB metadata structure
+	orb_id_t _rates_sp_id;	/**< pointer to correct rates setpoint uORB metadata structure */
+	orb_id_t _actuators_id;	/**< pointer to correct actuator controls0 uORB metadata structure */
 
 	bool		_actuators_0_circuit_breaker_enabled;	/**< circuit breaker to suppress output */
 
@@ -141,6 +141,7 @@ private:
 	struct vehicle_status_s				_vehicle_status;	/**< vehicle status */
 
 	perf_counter_t	_loop_perf;			/**< loop performance counter */
+	perf_counter_t	_controller_latency_perf;
 
 	math::Vector<3>		_rates_prev;	/**< angular rates on previous step */
 	math::Vector<3>		_rates_sp;		/**< angular rates setpoint */
@@ -175,7 +176,6 @@ private:
 		param_t acro_pitch_max;
 		param_t acro_yaw_max;
 
-		param_t autostart_id;	//what frame are we using?
 	}		_params_handles;		/**< handles for interesting parameters */
 
 	struct {
@@ -191,7 +191,6 @@ private:
 		float man_yaw_max;
 		math::Vector<3> acro_rate_max;		/**< max attitude rates in acro mode */
 
-		param_t autostart_id;
 	}		_params;
 
 	/**
@@ -285,11 +284,14 @@ MulticopterAttitudeControl::MulticopterAttitudeControl() :
 	_att_sp_pub(-1),
 	_v_rates_sp_pub(-1),
 	_actuators_0_pub(-1),
+	_rates_sp_id(0),
+	_actuators_id(0),
 
 	_actuators_0_circuit_breaker_enabled(false),
 
 /* performance counters */
-	_loop_perf(perf_alloc(PC_ELAPSED, "mc_att_control"))
+	_loop_perf(perf_alloc(PC_ELAPSED, "mc_att_control")),
+	_controller_latency_perf(perf_alloc_once(PC_ELAPSED, "ctrl_latency"))
 
 {
 	memset(&_v_att, 0, sizeof(_v_att));
@@ -312,8 +314,6 @@ MulticopterAttitudeControl::MulticopterAttitudeControl() :
 	_params.man_pitch_max = 0.0f;
 	_params.man_yaw_max = 0.0f;
 	_params.acro_rate_max.zero();
-
-	_params.autostart_id = 0; //default
 
 	_rates_prev.zero();
 	_rates_sp.zero();
@@ -344,19 +344,8 @@ MulticopterAttitudeControl::MulticopterAttitudeControl() :
 	_params_handles.acro_pitch_max	= 	param_find("MC_ACRO_P_MAX");
 	_params_handles.acro_yaw_max		= 	param_find("MC_ACRO_Y_MAX");
 
-	_params_handles.autostart_id 	= param_find("SYS_AUTOSTART");
-
 	/* fetch initial parameter values */
 	parameters_update();
-	// set correct uORB ID, depending on if vehicle is VTOL or not
-	if (_params.autostart_id >= 13000 && _params.autostart_id <= 13999) { /* VTOL airframe?*/
-		_rates_sp_id = ORB_ID(mc_virtual_rates_setpoint);
-		_actuators_id = ORB_ID(actuator_controls_virtual_mc);
-	}
-	else {
-		_rates_sp_id = ORB_ID(vehicle_rates_setpoint);
-		_actuators_id = ORB_ID(actuator_controls_0);
-	}
 }
 
 MulticopterAttitudeControl::~MulticopterAttitudeControl()
@@ -439,8 +428,6 @@ MulticopterAttitudeControl::parameters_update()
 	_params.acro_rate_max(2) = math::radians(v);
 
 	_actuators_0_circuit_breaker_enabled = circuit_breaker_enabled("CBRK_RATE_CTRL", CBRK_RATE_CTRL_KEY);
-
-	param_get(_params_handles.autostart_id, &_params.autostart_id);
 
 	return OK;
 }
@@ -531,6 +518,16 @@ MulticopterAttitudeControl::vehicle_status_poll()
 
 	if (vehicle_status_updated) {
 		orb_copy(ORB_ID(vehicle_status), _vehicle_status_sub, &_vehicle_status);
+		/* set correct uORB ID, depending on if vehicle is VTOL or not */
+		if (!_rates_sp_id) {
+			if (_vehicle_status.is_vtol) {
+				_rates_sp_id = ORB_ID(mc_virtual_rates_setpoint);
+				_actuators_id = ORB_ID(actuator_controls_virtual_mc);
+			} else {
+				_rates_sp_id = ORB_ID(vehicle_rates_setpoint);
+				_actuators_id = ORB_ID(actuator_controls_0);
+			}
+		}
 	}
 }
 
@@ -844,7 +841,7 @@ MulticopterAttitudeControl::task_main()
 				if (_v_rates_sp_pub > 0) {
 					orb_publish(_rates_sp_id, _v_rates_sp_pub, &_v_rates_sp);
 
-				} else {
+				} else if (_rates_sp_id) {
 					_v_rates_sp_pub = orb_advertise(_rates_sp_id, &_v_rates_sp);
 				}
 
@@ -868,7 +865,7 @@ MulticopterAttitudeControl::task_main()
 					if (_v_rates_sp_pub > 0) {
 						orb_publish(_rates_sp_id, _v_rates_sp_pub, &_v_rates_sp);
 
-					} else {
+					} else if (_rates_sp_id) {
 						_v_rates_sp_pub = orb_advertise(_rates_sp_id, &_v_rates_sp);
 					}
 
@@ -891,12 +888,14 @@ MulticopterAttitudeControl::task_main()
 				_actuators.control[2] = (isfinite(_att_control(2))) ? _att_control(2) : 0.0f;
 				_actuators.control[3] = (isfinite(_thrust_sp)) ? _thrust_sp : 0.0f;
 				_actuators.timestamp = hrt_absolute_time();
+				_actuators.timestamp_sample = _v_att.timestamp;
 
 				if (!_actuators_0_circuit_breaker_enabled) {
 					if (_actuators_0_pub > 0) {
 						orb_publish(_actuators_id, _actuators_0_pub, &_actuators);
+						perf_end(_controller_latency_perf);
 
-					} else {
+					} else if (_actuators_id) {
 						_actuators_0_pub = orb_advertise(_actuators_id, &_actuators);
 					}
 

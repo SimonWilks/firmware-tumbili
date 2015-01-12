@@ -81,6 +81,7 @@
 #include <uORB/topics/system_power.h>
 #include <uORB/topics/mission.h>
 #include <uORB/topics/mission_result.h>
+#include <uORB/topics/geofence_result.h>
 #include <uORB/topics/telemetry_status.h>
 #include <uORB/topics/vtol_vehicle_status.h>
 
@@ -267,7 +268,7 @@ int commander_main(int argc, char *argv[])
 					     SCHED_PRIORITY_MAX - 40,
 					     3200,
 					     commander_thread_main,
-					     (argv) ? (const char **)&argv[2] : (const char **)NULL);
+					     (argv) ? (char * const *)&argv[2] : (char * const *)NULL);
 
 		while (!thread_running) {
 			usleep(200);
@@ -738,9 +739,6 @@ int commander_thread_main(int argc, char *argv[])
 	param_t _param_ef_time_thres = param_find("COM_EF_TIME");
 	param_t _param_autostart_id = param_find("SYS_AUTOSTART");
 
-	/* welcome user */
-	warnx("starting");
-
 	const char *main_states_str[MAIN_STATE_MAX];
 	main_states_str[MAIN_STATE_MANUAL]			= "MANUAL";
 	main_states_str[MAIN_STATE_ALTCTL]			= "ALTCTL";
@@ -926,6 +924,11 @@ int commander_thread_main(int argc, char *argv[])
 	struct mission_result_s mission_result;
 	memset(&mission_result, 0, sizeof(mission_result));
 
+	/* Subscribe to geofence result topic */
+	int geofence_result_sub = orb_subscribe(ORB_ID(geofence_result));
+	struct geofence_result_s geofence_result;
+	memset(&geofence_result, 0, sizeof(geofence_result));
+
 	/* Subscribe to manual control data */
 	int sp_man_sub = orb_subscribe(ORB_ID(manual_control_setpoint));
 	struct manual_control_setpoint_s sp_man;
@@ -1092,6 +1095,10 @@ int commander_thread_main(int argc, char *argv[])
 					status.is_rotary_wing = false;
 				}
 
+				/* set vehicle_status.is_vtol flag */
+				status.is_vtol =  (status.system_type == VEHICLE_TYPE_VTOL_DUOROTOR) ||
+				    (status.system_type == VEHICLE_TYPE_VTOL_QUADROTOR);
+
 				/* check and update system / component ID */
 				param_get(_param_system_id, &(status.system_id));
 				param_get(_param_component_id, &(status.component_id));
@@ -1113,6 +1120,8 @@ int commander_thread_main(int argc, char *argv[])
 
 			/* navigation parameters */
 			param_get(_param_takeoff_alt, &takeoff_alt);
+
+			/* Safety parameters */
 			param_get(_param_enable_parachute, &parachute_enabled);
 			param_get(_param_enable_datalink_loss, &datalink_loss_enabled);
 			param_get(_param_datalink_loss_timeout, &datalink_loss_timeout);
@@ -1121,6 +1130,8 @@ int commander_thread_main(int argc, char *argv[])
 			param_get(_param_ef_throttle_thres, &ef_throttle_thres);
 			param_get(_param_ef_current2throttle_thres, &ef_current2throttle_thres);
 			param_get(_param_ef_time_thres, &ef_time_thres);
+
+			/* Autostart id */
 			param_get(_param_autostart_id, &autostart_id);
 		}
 
@@ -1253,7 +1264,7 @@ int commander_thread_main(int argc, char *argv[])
 		if (updated) {
 			/* vtol status changed */
 			orb_copy(ORB_ID(vtol_vehicle_status), vtol_vehicle_status_sub, &vtol_status);
-
+			status.vtol_fw_permanent_stab = vtol_status.fw_permanent_stab;
 			/* Make sure that this is only adjusted if vehicle realy is of type vtol*/
 			if (status.system_type == VEHICLE_TYPE_VTOL_DUOROTOR || VEHICLE_TYPE_VTOL_QUADROTOR) {
 				status.is_rotary_wing = vtol_status.vtol_in_rw_mode;
@@ -1545,26 +1556,33 @@ int commander_thread_main(int argc, char *argv[])
 
 		if (updated) {
 			orb_copy(ORB_ID(mission_result), mission_result_sub, &mission_result);
-
-			/* Check for geofence violation */
-			if (armed.armed && (mission_result.geofence_violated || mission_result.flight_termination)) {
-				//XXX: make this configurable to select different actions (e.g. navigation modes)
-				/* this will only trigger if geofence is activated via param and a geofence file is present, also there is a circuit breaker to disable the actual flight termination in the px4io driver */
-				armed.force_failsafe = true;
-				status_changed = true;
-				static bool flight_termination_printed = false;
-
-				if (!flight_termination_printed) {
-					warnx("Flight termination because of navigator request or geofence");
-					mavlink_log_critical(mavlink_fd, "GF violation: flight termination");
-					flight_termination_printed = true;
-				}
-
-				if (counter % (1000000 / COMMANDER_MONITORING_INTERVAL) == 0) {
-					mavlink_log_critical(mavlink_fd, "GF violation: flight termination");
-				}
-			} // no reset is done here on purpose, on geofence violation we want to stay in flighttermination
 		}
+
+		/* start geofence result check */
+		orb_check(geofence_result_sub, &updated);
+
+		if (updated) {
+			orb_copy(ORB_ID(geofence_result), geofence_result_sub, &geofence_result);
+		}
+
+		/* Check for geofence violation */
+		if (armed.armed && (geofence_result.geofence_violated || mission_result.flight_termination)) {
+			//XXX: make this configurable to select different actions (e.g. navigation modes)
+			/* this will only trigger if geofence is activated via param and a geofence file is present, also there is a circuit breaker to disable the actual flight termination in the px4io driver */
+			armed.force_failsafe = true;
+			status_changed = true;
+			static bool flight_termination_printed = false;
+
+			if (!flight_termination_printed) {
+				warnx("Flight termination because of navigator request or geofence");
+				mavlink_log_critical(mavlink_fd, "GF violation: flight termination");
+				flight_termination_printed = true;
+			}
+
+			if (counter % (1000000 / COMMANDER_MONITORING_INTERVAL) == 0) {
+				mavlink_log_critical(mavlink_fd, "GF violation: flight termination");
+			}
+		} // no reset is done here on purpose, on geofence violation we want to stay in flighttermination
 
 		/* RC input check */
 		if (!status.rc_input_blocked && sp_man.timestamp != 0 &&
@@ -2217,14 +2235,7 @@ set_control_mode()
 {
 	/* set vehicle_control_mode according to set_navigation_state */
 	control_mode.flag_armed = armed.armed;
-	/* TODO: check this */
-	if (autostart_id < 13000 || autostart_id >= 14000) {
-		control_mode.flag_external_manual_override_ok = !status.is_rotary_wing;
-
-	} else {
-		control_mode.flag_external_manual_override_ok = false;
-	}
-
+	control_mode.flag_external_manual_override_ok = (!status.is_rotary_wing && !status.is_vtol);
 	control_mode.flag_system_hil_enabled = status.hil_state == HIL_STATE_ON;
 	control_mode.flag_control_offboard_enabled = false;
 
@@ -2232,8 +2243,8 @@ set_control_mode()
 	case NAVIGATION_STATE_MANUAL:
 		control_mode.flag_control_manual_enabled = true;
 		control_mode.flag_control_auto_enabled = false;
-		control_mode.flag_control_rates_enabled = status.is_rotary_wing;
-		control_mode.flag_control_attitude_enabled = status.is_rotary_wing;
+		control_mode.flag_control_rates_enabled = (status.is_rotary_wing || status.vtol_fw_permanent_stab);
+		control_mode.flag_control_attitude_enabled = (status.is_rotary_wing || status.vtol_fw_permanent_stab);
 		control_mode.flag_control_altitude_enabled = false;
 		control_mode.flag_control_climb_rate_enabled = false;
 		control_mode.flag_control_position_enabled = false;
