@@ -69,7 +69,6 @@ void VtolTransitionControl::set_current_position(struct vehicle_local_position_s
 	_vel(0) = pos.vx;
 	_vel(1) = pos.vy;
 	_vel(2) = pos.vz;
-
 }
 
 void VtolTransitionControl::set_target_position(struct vehicle_local_position_setpoint_s &pos_sp) {
@@ -94,8 +93,8 @@ bool VtolTransitionControl::is_initialized() {
 }
 
 void VtolTransitionControl::initialize(struct vehicle_local_position_s &pos) {
-	_position_sp.x = cosf(_att.yaw)*L;
-	_position_sp.y = sinf(_att.yaw)*L;
+	_position_sp.x += cosf(_att.yaw)*L;
+	_position_sp.y += sinf(_att.yaw)*L;
 	_position_sp.z -= H;	// z axis points down
 	_position_sp.yaw = _att.yaw;
 	_initialized = true;
@@ -112,7 +111,7 @@ void VtolTransitionControl::get_desired_acceleration(math::Vector<3> &acc) {
 
 	// compute position and velocity error
 	math::Vector<3> pos_error = _position - _position_sp;
-	math::Vector<3> vel_error = _R*_vel - _vel_sp;	// in body frame
+	math::Vector<3> vel_error = _vel - _vel_sp;	// in global frame
 
 	for (int i = 0;i < 3;i++) {
 		acc(i) = acc_feedforward(i) - 2.0f*_zeta_p(i)/_tau_p(i) * vel_error(i)
@@ -136,7 +135,7 @@ int VtolTransitionControl::run_controller() {
 	// substract estimated aerodynamic acceleration
 	math::Vector<3> f_air;
 	get_aerodynamic_force(f_air);
-	a_des = a_des - (_R*f_air)/MASS;
+	a_des = a_des - (_R.transposed()*f_air)/MASS;
 
 	// constrain acceleration to never be positive along body z axis (z axis points down)
 	a_des = _R*a_des;
@@ -145,17 +144,12 @@ int VtolTransitionControl::run_controller() {
 
 	// compute desired yaw
 	float yaw_des;
-	if(_vel(0)*_vel(0) + _vel(1)*_vel(1) > 0.5f) { // are we moving in the ground plane?
-		yaw_des = atan2f(_vel(1),_vel(0));
-		float yaw_diff = yaw_des - _euler(2);
-		while (yaw_diff > M_PI_F) { yaw_diff = yaw_diff - 2.0f*M_PI_F;}
-		while (yaw_diff < -M_PI_F) {yaw_diff = yaw_diff + 2.0f*M_PI_F;}
-		if (fabsf(yaw_diff) > M_PI_2_F) {
-			yaw_des = yaw_des > 0.0f ? yaw_des - M_PI_F : yaw_des + M_PI_F;
-		}
+	math::Vector<3> pos_error = _position_sp - _position;
+	if(fabsf(pos_error(0)*pos_error(0) + pos_error(1)*pos_error(1)) > 0.01f) {
+		yaw_des = atan2f(pos_error(1),pos_error(0));
 	}
 	else {
-		yaw_des = _euler(2);	// take momentary heading
+		yaw_des = _euler(2);
 	}
 
 	// rotate desired acceleration such that nose of vehicle is in flight direction
@@ -174,7 +168,7 @@ int VtolTransitionControl::run_controller() {
 	math::Vector<3> rot_axis;
 	// if our heading is more or less correct, only rotate around pitch to ensure we fly with roll ~= 0
 	// this probably needs tuning
-	if (fabsf(alpha) < 0.0001f || fabsf(alpha + M_PI_F) < 0.0001f || fabsf(alpha - M_PI_F) < 0.0001f) {
+	if (fabsf(alpha) < 0.001f || fabsf(alpha + M_PI_F) < 0.001f || fabsf(alpha - M_PI_F) < 0.001f) {
 		rot_axis(0) = 0.0f;
 		rot_axis(1) = 1.0f;
 		rot_axis(2) = 0.0f;
@@ -192,7 +186,7 @@ int VtolTransitionControl::run_controller() {
 	q_xy(2) = rot_axis(1);
 	q_xy(3) = rot_axis(2);
 
-	_q_des = q_xy*q_yaw;	// combine the two rotations
+	_q_des = get_quat_mult_mat(q_xy)*q_yaw;	// combine the two rotations
 
 	// rotate body z-axis to global frame
 	zb_des = R_yaw.transposed()*zb_des;
@@ -201,6 +195,7 @@ int VtolTransitionControl::run_controller() {
 	math::Vector<3> zb = _R.transposed()*zi;
 	_thrust_des = zb*zb_des;
 	_thrust_des *= MASS*a_des.length(); // this is a force!
+	_thrust_des = math::constrain(_thrust_des,0.0f,20.0f);
 
 	return 0;
 }
@@ -223,5 +218,26 @@ void VtolTransitionControl::write_att_sp(struct vehicle_attitude_setpoint_s &att
 	att_sp.pitch_body = euler(1);
 	att_sp.yaw_body = euler(2);
 
-	att_sp.thrust = math::constrain(_thrust_des*THRUST_SCALING,0.4f,0.7f);	// limit this for now
+	att_sp.thrust = math::constrain(_thrust_des*THRUST_SCALING,0.3f,0.7f);	// limit this for now
+}
+
+math::Matrix<4,4> VtolTransitionControl::get_quat_mult_mat(math::Quaternion &q) {
+	math::Matrix<4,4> res;
+	res(0,0) =  q(0);
+	res(1,0) =  q(1);
+	res(2,0) =  q(2);
+	res(3,0) =  q(3);
+	res(0,1) = -q(1);
+	res(1,1) =  q(0);
+	res(2,1) = -q(3);
+	res(3,1) =  q(2);
+	res(0,2) = -q(2);
+	res(1,2) =  q(3);
+	res(2,2) =  q(0);
+	res(3,2) = -q(1);
+	res(0,3) = -q(3);
+	res(1,3) = -q(2);
+	res(2,3) =  q(1);
+	res(3,3) =  q(0);
+	return res;
 }

@@ -48,7 +48,7 @@
 // for now parameters are hardcoded
 #define GRAVITY 9.81f
 #define MASS 0.70f
-#define THRUST_SCALING 2
+#define THRUST_SCALING 0.02f
 #define L 10
 #define H 5
 
@@ -67,6 +67,7 @@ public:
 	void deinitialize();
 	int run_controller();
 	void write_att_sp(struct vehicle_attitude_setpoint_s &att_sp);
+	math::Matrix<4,4> get_quat_mult_mat(math::Quaternion &q);
 
 private:
 	// data containers
