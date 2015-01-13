@@ -288,7 +288,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 
 	_u = 0;
 	_alt_init = 0;
-	_thrust_init = 0;
+	_thrust_init = 0.0f;
 	_control_height = false;
 	thrust_ctrl_high_bound = 0.8;
 	thrust_ctrl_low_bound = 0.2;
@@ -633,7 +633,9 @@ void VtolAttitudeControl::control_thrust_on_demand() {
 	if(_manual_control_sp.aux2 > 0.0f && _control_height == false && _local_pos.z_valid) {
 		// user wants thrust to be controller, check if possible
 		if (thrust_ctrl_low_bound <= _manual_control_sp.z && _manual_control_sp.z <= thrust_ctrl_high_bound) {
-			_thrust_init = _manual_control_sp.z;	// thrust which corresponds to current altitude
+			if(_thrust_init < 0.1f) {
+				_thrust_init = _manual_control_sp.z;	// thrust which corresponds to current altitude
+			}
 			_alt_init = -_local_pos.z;
 			_desired_height = _alt_init;
 			_control_height = true;
