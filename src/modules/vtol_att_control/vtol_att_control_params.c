@@ -109,3 +109,25 @@ PARAM_DEFINE_INT32(VT_FW_PERM_STAB,0);
  */
 PARAM_DEFINE_FLOAT(VT_FW_PITCH_TRIM,0.0f);
 
+/**
+ * Motor max power
+ *
+ * Indicates the maximum power the motor is able to produce. Used to calculate
+ * propeller efficiency map.
+ *
+ * @min 1
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_POWER_MAX,120.0f);
+
+/**
+ * Propeller efficiency parameter
+ *
+ * Influences propeller efficiency at different power settings. Should be tuned beforehand.
+ *
+ * @min 0.5
+ * @max 0.9
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_PROP_EFF,0.0f);
+

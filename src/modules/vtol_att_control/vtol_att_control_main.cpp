@@ -66,6 +66,7 @@
 #include <uORB/topics/airspeed.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/battery_status.h>
 #include <systemlib/param/param.h>
 #include <systemlib/err.h>
 #include <systemlib/perf_counter.h>
@@ -111,6 +112,7 @@ private:
 	int		_armed_sub;				//arming status subscription
 	int 	_local_pos_sub;	// sensor subscription
 	int 	_airspeed_sub;			// airspeed subscription
+	int 	_battery_status_sub;	// battery status subscription
 
 	int 	_actuator_inputs_mc;	//topic on which the mc_att_controller publishes actuator inputs
 	int 	_actuator_inputs_fw;	//topic on which the fw_att_controller publishes actuator inputs
@@ -136,6 +138,7 @@ private:
 	struct actuator_armed_s				_armed;				//actuator arming status
 	struct vehicle_local_position_s		_local_pos;
 	struct airspeed_s 					_airspeed;			// airspeed
+	struct battery_status_s 			_batt_status; 		// battery status
 
 	struct {
 		param_t idle_pwm_mc;	//pwm value for idle in mc mode
@@ -145,6 +148,8 @@ private:
 		float mc_airspeed_trim;		// trim airspeed in multicopter mode
 		float mc_airspeed_max;		// max airpseed in multicopter mode
 		float fw_pitch_trim;		// trim for neutral elevon position in fw mode
+		float power_max;			// maximum power of one engine
+		float prop_eff;				// factor to calculate prop efficiency
 	} _params;
 
 	struct {
@@ -155,6 +160,8 @@ private:
 		param_t mc_airspeed_trim;
 		param_t mc_airspeed_max;
 		param_t fw_pitch_trim;
+		param_t power_max;
+		param_t prop_eff;
 	} _params_handles;
 
 	perf_counter_t	_loop_perf;			/**< loop performance counter */
@@ -165,6 +172,7 @@ private:
 	 * to waste energy when gliding. */
 	bool flag_idle_mc;		//false = "idle is set for fixed wing mode"; true = "idle is set for multicopter mode"
 	unsigned _motor_count;	// number of motors
+	float _airspeed_tot;
 
 	// simple thrust controller
 	float _alt_init;
@@ -193,8 +201,9 @@ private:
 	void 		actuator_controls_fw_poll();	//Check for changes in fw_attitude_control output
 	void 		vehicle_rates_sp_mc_poll();
 	void 		vehicle_rates_sp_fw_poll();
-	void 		vehicle_local_pos_poll();			// Check for changes in sensor values
+	void 		vehicle_local_pos_poll();		// Check for changes in sensor values
 	void 		vehicle_airspeed_poll();		// Check for changes in airspeed
+	void 		vehicle_battery_poll();			// Check for battery updates
 	void 		parameters_update_poll();		//Check if parameters have changed
 	int 		parameters_update();			//Update local paraemter cache
 	void  		fill_mc_att_control_output();	//write mc_att_control results to actuator message
@@ -206,6 +215,7 @@ private:
 	void 		control_thrust_on_demand();
 	void 		control_thrust();				// simple thrust controller for take-off aid
 	void 		scale_mc_output();
+	void 		calc_tot_airspeed();			// estimated airspeed seen by elevons
 };
 
 namespace VTOL_att_control
@@ -231,6 +241,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_armed_sub(-1),
 	_local_pos_sub(-1),
 	_airspeed_sub(-1),
+	_battery_status_sub(-1),
 
 	//init publication handlers
 	_actuators_0_pub(-1),
@@ -243,6 +254,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 {
 
 	flag_idle_mc = true;
+	_airspeed_tot = 0.0f;
 
 	memset(& _vtol_vehicle_status, 0, sizeof(_vtol_vehicle_status));
 	_vtol_vehicle_status.vtol_in_rw_mode = true;	/* start vtol in rotary wing mode*/
@@ -261,6 +273,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	memset(&_armed, 0, sizeof(_armed));
 	memset(&_local_pos,0,sizeof(_local_pos));
 	memset(&_airspeed,0,sizeof(_airspeed));
+	memset(&_batt_status,0,sizeof(_batt_status));
 
 	_params.idle_pwm_mc = PWM_LOWEST_MIN;
 	_params.vtol_motor_count = 0;
@@ -273,6 +286,8 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_params_handles.mc_airspeed_max = param_find("VT_MC_ARSPD_MAX");
 	_params_handles.mc_airspeed_trim = param_find("VT_MC_ARSPD_TRIM");
 	_params_handles.fw_pitch_trim = param_find("VT_FW_PITCH_TRIM");
+	_params_handles.power_max = param_find("VT_POWER_MAX");
+	_params_handles.prop_eff = param_find("VT_PROP_EFF");
 
 	// init LQG
 	_A_cl(0,0) = 0.7739;
@@ -433,6 +448,19 @@ VtolAttitudeControl::vehicle_airspeed_poll() {
 }
 
 /**
+* Check for battery updates.
+*/
+void
+VtolAttitudeControl::vehicle_battery_poll() {
+	bool updated;
+	orb_check(_battery_status_sub, &updated);
+
+	if (updated) {
+		orb_copy(ORB_ID(battery_status), _battery_status_sub , &_batt_status);
+	}
+}
+
+/**
 * Check for parameter updates.
 */
 void
@@ -497,6 +525,14 @@ VtolAttitudeControl::parameters_update()
 	/* vtol pitch trim for fw mode */
 	param_get(_params_handles.fw_pitch_trim, &v);
 	_params.fw_pitch_trim = v;
+
+	/* vtol maximum power engine can produce */
+	param_get(_params_handles.power_max, &v);
+	_params.power_max = v;
+
+	/* vtol propeller efficiency factor */
+	param_get(_params_handles.prop_eff, &v);
+	_params.prop_eff = v;
 
 	return OK;
 }
@@ -663,7 +699,7 @@ void
 VtolAttitudeControl::scale_mc_output() {
 	// scale around tuning airspeed
 	float airspeed;
-
+	calc_tot_airspeed();	// estimate air velocity seen by elevons
 	// if airspeed is not updating, we assume the normal average speed
 	if (bool nonfinite = !isfinite(_airspeed.true_airspeed_m_s) ||
 	    hrt_elapsed_time(&_airspeed.timestamp) > 1e6) {
@@ -673,13 +709,8 @@ VtolAttitudeControl::scale_mc_output() {
 		}
 		} else {
 			// prevent numerical drama by requiring 0.5 m/s minimal speed
-			airspeed = math::max(0.5f, _airspeed.true_airspeed_m_s);
+			airspeed = math::max(0.5f, _airspeed_tot);
 		}
-
-	// Sanity check if airspeed is consistent with throttle
-	if(_manual_control_sp.z >= 0.35f && airspeed < _params.mc_airspeed_trim) {	// XXX magic number, should be hover throttle param
-		airspeed = _params.mc_airspeed_trim;
-	}
 
 	/*
 	 * For scaling our actuators using anything less than the min (close to stall)
@@ -690,6 +721,23 @@ VtolAttitudeControl::scale_mc_output() {
 	 */
 	float airspeed_scaling = _params.mc_airspeed_trim / ((airspeed < _params.mc_airspeed_min) ? _params.mc_airspeed_min : airspeed);
 	_actuators_mc_in.control[1] = math::constrain(_actuators_mc_in.control[1]*airspeed_scaling*airspeed_scaling,-1.0f,1.0f);
+}
+
+void VtolAttitudeControl::calc_tot_airspeed() {
+	float airspeed = math::max(1.0f, _airspeed.true_airspeed_m_s);	// prevent numerical drama
+	// calculate momentary power
+	float P = _batt_status.voltage_filtered_v * _batt_status.current_a / 2;
+	math::constrain(P,1.0f,_params.power_max);
+	// calculate expected thrust
+	float power_factor = 1.0f - P*_params.prop_eff/_params.power_max;
+	float eta = (1.0f/(1 + expf(-0.5f * power_factor * airspeed)) - 0.5f)*2;
+	eta = math::constrain(eta,0.01f,1.0f);	// live on the safe side
+	float thrust = eta * P / airspeed;
+	// calculate induced airspeed by propeller
+	float v_ind = (P / thrust - airspeed)*2;
+	v_ind = math::max(0.0f,v_ind);	// prevent negative values
+	// calculate total airspeed
+	_airspeed_tot = airspeed + v_ind;
 }
 
 void
