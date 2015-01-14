@@ -711,7 +711,7 @@ VtolAttitudeControl::scale_mc_output() {
 			// prevent numerical drama by requiring 0.5 m/s minimal speed
 			airspeed = math::max(0.5f, _airspeed_tot);
 		}
-
+	_vtol_vehicle_status.airspeed_tot = airspeed;	// save value for logging
 	/*
 	 * For scaling our actuators using anything less than the min (close to stall)
 	 * speed doesn't make any sense - its the strongest reasonable deflection we

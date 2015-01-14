@@ -427,6 +427,12 @@ struct log_ENCD_s {
 /* --- AIR SPEED SENSORS - DIFF. PRESSURE --- */
 #define LOG_AIR1_MSG 40
 
+/* --- VTOL - VTOL VEHICLE STATUS */
+#define LOG_VTOL_MSG 41
+struct log_VTOL_s {
+	float airspeed_tot;
+};
+
 /********** SYSTEM MESSAGES, ID > 0x80 **********/
 
 /* --- TIME - TIME STAMP --- */
@@ -468,6 +474,7 @@ static const struct log_format_s log_formats[] = {
 	LOG_FORMAT_S(ATTC, ATTC, "ffff",		"Roll,Pitch,Yaw,Thrust"),
 	LOG_FORMAT_S(ATC1, ATTC, "ffff",		"Roll,Pitch,Yaw,Thrust"),
 	LOG_FORMAT(STAT, "BBBfBB",		"MainState,ArmState,FailsafeState,BatRem,BatWarn,Landed"),
+	LOG_FORMAT(VTOL, "f",			"AirspeedTot"),
 	LOG_FORMAT(RC, "ffffffffBB",		"Ch0,Ch1,Ch2,Ch3,Ch4,Ch5,Ch6,Ch7,Count,SignalLost"),
 	LOG_FORMAT(OUT0, "ffffffff",		"Out0,Out1,Out2,Out3,Out4,Out5,Out6,Out7"),
 	LOG_FORMAT(AIRS, "fff",			"IndSpeed,TrueSpeed,AirTemp"),
