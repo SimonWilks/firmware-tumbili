@@ -709,11 +709,13 @@ VtolAttitudeControl::scale_mc_output() {
 		if (nonfinite) {
 			perf_count(_nonfinite_input_perf);
 		}
-		} else {
-			// prevent numerical drama by requiring 0.5 m/s minimal speed
-			airspeed = math::max(0.5f, _airspeed_tot);
-		}
-	_vtol_vehicle_status.airspeed_tot = airspeed;	// save value for logging
+	} else {
+		// prevent numerical drama by requiring 6 m/s minimal speed
+		airspeed = math::max(6.0f, _airspeed_tot);
+	}
+	_airspeed_tot = math::max(_airspeed_tot,1.0f);
+	_vtol_vehicle_status.airspeed_tot = _airspeed_tot;	// save value for logging
+	airspeed = _airspeed_tot;
 	/*
 	 * For scaling our actuators using anything less than the min (close to stall)
 	 * speed doesn't make any sense - its the strongest reasonable deflection we
@@ -728,18 +730,18 @@ VtolAttitudeControl::scale_mc_output() {
 void VtolAttitudeControl::calc_tot_airspeed() {
 	float airspeed = math::max(1.0f, _airspeed.true_airspeed_m_s);	// prevent numerical drama
 	// calculate momentary power
-	float P = _batt_status.voltage_filtered_v * _batt_status.current_a / 2;
-	math::constrain(P,1.0f,_params.power_max);
+	float P = _batt_status.voltage_filtered_v * _batt_status.current_a / 2.0f;
+	P = math::constrain(P,1.0f,_params.power_max);
 	// calculate expected thrust
 	float power_factor = 1.0f - P*_params.prop_eff/_params.power_max;
-	float eta = (1.0f/(1 + expf(-0.5f * power_factor * airspeed)) - 0.5f)*2;
-	eta = math::constrain(eta,0.01f,1.0f);	// live on the safe side
-	float thrust = eta * P / airspeed;
+	float eta = (1.0f/(1 + expf(-0.4f * power_factor * airspeed)) - 0.5f)*2.0f;
+	eta = math::constrain(eta,0.001f,1.0f);	// live on the safe side
 	// calculate induced airspeed by propeller
-	float v_ind = (P / thrust - airspeed)*2;
-	v_ind = math::max(0.0f,v_ind);	// prevent negative values
+	float v_ind = (1.0f/eta - airspeed)*2.0f;
+	//v_ind = math::max(0.0f,v_ind);	// prevent negative values
 	// calculate total airspeed
 	_airspeed_tot = airspeed + v_ind;
+	
 }
 
 void
@@ -764,6 +766,7 @@ void VtolAttitudeControl::task_main()
 	_armed_sub             = orb_subscribe(ORB_ID(actuator_armed));
 	_local_pos_sub         = orb_subscribe(ORB_ID(vehicle_local_position));
 	_airspeed_sub          = orb_subscribe(ORB_ID(airspeed));
+	_battery_status_sub	   = orb_subscribe(ORB_ID(battery_status));
 
 	_actuator_inputs_mc    = orb_subscribe(ORB_ID(actuator_controls_virtual_mc));
 	_actuator_inputs_fw    = orb_subscribe(ORB_ID(actuator_controls_virtual_fw));
@@ -835,6 +838,8 @@ void VtolAttitudeControl::task_main()
 		parameters_update_poll();
 		vehicle_local_pos_poll();			// Check for new sensor values
 		vehicle_airspeed_poll();
+		vehicle_battery_poll();
+
 
 		if (_manual_control_sp.aux1 <= 0.0f) {		/* vehicle is in mc mode */
 			_vtol_vehicle_status.vtol_in_rw_mode = true;
@@ -850,10 +855,7 @@ void VtolAttitudeControl::task_main()
 				orb_copy(ORB_ID(actuator_controls_virtual_mc), _actuator_inputs_mc, &_actuators_mc_in);
 
 				control_thrust_on_demand();
-				// scale pitch control with airspeed
-				if(_airspeed.true_airspeed_m_s > 13.0f) {
-					scale_mc_output();
-				}
+				scale_mc_output();
 
 				fill_mc_att_control_output();
 				fill_mc_att_rates_sp();

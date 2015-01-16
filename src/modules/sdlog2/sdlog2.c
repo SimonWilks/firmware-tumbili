@@ -1227,6 +1227,7 @@ int sdlog2_thread_main(int argc, char *argv[])
 		if(copy_if_updated(ORB_ID(vtol_vehicle_status), subs.vtol_status_sub, &buf.vtol_status)) {
 			log_msg.msg_type = LOG_VTOL_MSG;
 			log_msg.body.log_VTOL.airspeed_tot = buf.vtol_status.airspeed_tot;
+			LOGBUFFER_WRITE_AND_COUNT(VTOL);
 		}
 
 		/* --- GPS POSITION - UNIT #1 --- */
