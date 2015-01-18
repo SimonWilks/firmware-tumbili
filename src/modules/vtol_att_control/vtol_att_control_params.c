@@ -131,3 +131,14 @@ PARAM_DEFINE_FLOAT(VT_POWER_MAX,120.0f);
  */
 PARAM_DEFINE_FLOAT(VT_PROP_EFF,0.0f);
 
+/**
+ * Total airspeed estimate low-pass filter gain
+ *
+ * Gain for tuning the low-pass filter for the total airspeed estimate
+ *
+ * @min 0.0
+ * @max 0.99
+ * @group VTOL Attitude Control
+ */
+PARAM_DEFINE_FLOAT(VT_ARSP_LP_GAIN,0.3f);
+

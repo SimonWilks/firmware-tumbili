@@ -150,6 +150,7 @@ private:
 		float fw_pitch_trim;		// trim for neutral elevon position in fw mode
 		float power_max;			// maximum power of one engine
 		float prop_eff;				// factor to calculate prop efficiency
+		float arsp_lp_gain;			// total airspeed estimate low pass gain
 	} _params;
 
 	struct {
@@ -162,6 +163,7 @@ private:
 		param_t fw_pitch_trim;
 		param_t power_max;
 		param_t prop_eff;
+		param_t arsp_lp_gain;
 	} _params_handles;
 
 	perf_counter_t	_loop_perf;			/**< loop performance counter */
@@ -288,6 +290,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_params_handles.fw_pitch_trim = param_find("VT_FW_PITCH_TRIM");
 	_params_handles.power_max = param_find("VT_POWER_MAX");
 	_params_handles.prop_eff = param_find("VT_PROP_EFF");
+	_params_handles.arsp_lp_gain = param_find("VT_ARSP_LP_GAIN");
 
 	// init LQG
 	_A_cl(0,0) = 0.7739;
@@ -534,6 +537,10 @@ VtolAttitudeControl::parameters_update()
 	param_get(_params_handles.prop_eff, &v);
 	_params.prop_eff = v;
 
+	/* vtol total airspeed estimate low pass gain */
+	param_get(_params_handles.arsp_lp_gain, &v);
+	_params.arsp_lp_gain = v;
+
 	return OK;
 }
 
@@ -652,21 +659,20 @@ void VtolAttitudeControl::control_thrust() {
 	// move desired height
 	float climb_rate = (_manual_control_sp.z - 0.5f);
 	_desired_height += climb_rate * 0.01f;
-	// if we move to fast up move altitude setpoint
-	if(_local_pos.vz < -1) {
-		_desired_height = -_local_pos.z - 0.3f;
-	}
-
 	_x_next = _A_cl * _x_last + _B * (_desired_height - (-_local_pos.z));
 	_x_last = _x_next;	// update state
 	_u = (_K * _x_next)/(thrust_to_force)*m + _thrust_init;
-	_u = math::constrain(_u,_thrust_init - 0.15f,0.7f);
+	_u = math::constrain(_u,_thrust_init - 0.10f,1.0f);
 }
 
 void VtolAttitudeControl::control_thrust_on_demand() {
 	static uint64_t last_run = 0;
+	static bool allow_thrust_control = false;
+	if(_local_pos.vz > -1 && _local_pos.vz < 1 && !allow_thrust_control) {
+		allow_thrust_control = true;
+	}
 	// run simple thrust controller if user wants to
-	if(_manual_control_sp.aux2 > 0.0f && _control_height == false && _local_pos.z_valid) {
+	if(_manual_control_sp.aux2 > 0.0f && _control_height == false && _local_pos.z_valid && allow_thrust_control) {
 		// user wants thrust to be controller, check if possible
 		if (thrust_ctrl_low_bound <= _manual_control_sp.z && _manual_control_sp.z <= thrust_ctrl_high_bound) {
 			if(_thrust_init < 0.1f) {
@@ -682,6 +688,7 @@ void VtolAttitudeControl::control_thrust_on_demand() {
 		}
 		else {
 			_control_height = false;
+			allow_thrust_control = false;
 		}
 	}
 	else if(_manual_control_sp.aux2 < 0.0f) {
@@ -711,11 +718,11 @@ VtolAttitudeControl::scale_mc_output() {
 		}
 	} else {
 		// prevent numerical drama by requiring 6 m/s minimal speed
-		airspeed = math::max(6.0f, _airspeed_tot);
+		airspeed = _airspeed_tot;
+		airspeed = math::constrain(airspeed,10.0f, 25.0f);
 	}
-	_airspeed_tot = math::max(_airspeed_tot,1.0f);
-	_vtol_vehicle_status.airspeed_tot = _airspeed_tot;	// save value for logging
-	airspeed = _airspeed_tot;
+	
+	_vtol_vehicle_status.airspeed_tot = airspeed;	// save value for logging
 	/*
 	 * For scaling our actuators using anything less than the min (close to stall)
 	 * speed doesn't make any sense - its the strongest reasonable deflection we
@@ -737,11 +744,11 @@ void VtolAttitudeControl::calc_tot_airspeed() {
 	float eta = (1.0f/(1 + expf(-0.4f * power_factor * airspeed)) - 0.5f)*2.0f;
 	eta = math::constrain(eta,0.001f,1.0f);	// live on the safe side
 	// calculate induced airspeed by propeller
-	float v_ind = (1.0f/eta - airspeed)*2.0f;
+	float v_ind = (airspeed/eta - airspeed)*2.0f;
 	//v_ind = math::max(0.0f,v_ind);	// prevent negative values
 	// calculate total airspeed
-	_airspeed_tot = airspeed + v_ind;
-	
+	float airspeed_raw = airspeed + v_ind;
+	_airspeed_tot = _params.arsp_lp_gain * (_airspeed_tot - airspeed_raw) + airspeed_raw;
 }
 
 void
