@@ -113,7 +113,7 @@ private:
 	int 	_local_pos_sub;	// sensor subscription
 	int 	_airspeed_sub;			// airspeed subscription
 	int 	_battery_status_sub;	// battery status subscription
-
+	
 	int 	_actuator_inputs_mc;	//topic on which the mc_att_controller publishes actuator inputs
 	int 	_actuator_inputs_fw;	//topic on which the fw_att_controller publishes actuator inputs
 
@@ -139,7 +139,7 @@ private:
 	struct vehicle_local_position_s		_local_pos;
 	struct airspeed_s 					_airspeed;			// airspeed
 	struct battery_status_s 			_batt_status; 		// battery status
-
+	
 	struct {
 		param_t idle_pwm_mc;	//pwm value for idle in mc mode
 		param_t vtol_motor_count;
@@ -175,6 +175,9 @@ private:
 	bool flag_idle_mc;		//false = "idle is set for fixed wing mode"; true = "idle is set for multicopter mode"
 	unsigned _motor_count;	// number of motors
 	float _airspeed_tot;
+	float _thrust_comp;		// additional thrust value to avoid low airflows over control surfaces
+	float _thrust_comp_filt;
+	float _thrust_low_bound;
 
 	// simple thrust controller
 	float _alt_init;
@@ -218,6 +221,7 @@ private:
 	void 		control_thrust();				// simple thrust controller for take-off aid
 	void 		scale_mc_output();
 	void 		calc_tot_airspeed();			// estimated airspeed seen by elevons
+	void 		limit_min_thrust();				// avoid too low airflow over elvons
 };
 
 namespace VTOL_att_control
@@ -244,7 +248,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	_local_pos_sub(-1),
 	_airspeed_sub(-1),
 	_battery_status_sub(-1),
-
+	
 	//init publication handlers
 	_actuators_0_pub(-1),
 	_actuators_1_pub(-1),
@@ -257,6 +261,9 @@ VtolAttitudeControl::VtolAttitudeControl() :
 
 	flag_idle_mc = true;
 	_airspeed_tot = 0.0f;
+	_thrust_comp = 0;
+	_thrust_comp_filt = 0;
+	_thrust_low_bound = 0.0f;
 
 	memset(& _vtol_vehicle_status, 0, sizeof(_vtol_vehicle_status));
 	_vtol_vehicle_status.vtol_in_rw_mode = true;	/* start vtol in rotary wing mode*/
@@ -276,7 +283,7 @@ VtolAttitudeControl::VtolAttitudeControl() :
 	memset(&_local_pos,0,sizeof(_local_pos));
 	memset(&_airspeed,0,sizeof(_airspeed));
 	memset(&_batt_status,0,sizeof(_batt_status));
-
+	
 	_params.idle_pwm_mc = PWM_LOWEST_MIN;
 	_params.vtol_motor_count = 0;
 	_params.vtol_fw_permanent_stab = 0;
@@ -552,10 +559,10 @@ void VtolAttitudeControl::fill_mc_att_control_output()
 	_actuators_out_0.control[0] = _actuators_mc_in.control[0];
 	_actuators_out_0.control[1] = _actuators_mc_in.control[1];
 	_actuators_out_0.control[2] = _actuators_mc_in.control[2];
-	_actuators_out_0.control[3] = _actuators_mc_in.control[3];
+	_actuators_out_0.control[3] = math::max(_actuators_mc_in.control[3],_thrust_low_bound);
 	//set neutral position for elevons
-	_actuators_out_1.control[0] = _actuators_mc_in.control[2];	//roll elevon
-	_actuators_out_1.control[1] = _actuators_mc_in.control[1];;	//pitch elevon
+	_actuators_out_1.control[0] = math::constrain(_actuators_mc_in.control[2],-1.0f,1.0f);	// yaw elevon
+	_actuators_out_1.control[1] = _actuators_mc_in.control[1];;	// pitch elevon
 }
 
 /**
@@ -751,6 +758,29 @@ void VtolAttitudeControl::calc_tot_airspeed() {
 	_airspeed_tot = _params.arsp_lp_gain * (_airspeed_tot - airspeed_raw) + airspeed_raw;
 }
 
+void VtolAttitudeControl::limit_min_thrust() {
+	// limit minimum thrust in order to avoid low airflows over control surfaces
+	// if(_airspeed_tot < _params.mc_airspeed_min && _v_control_mode.flag_control_altitude_enabled) {
+	// 	_thrust_comp += 1.0f/400.0f;
+	// }
+	// else if(_airspeed_tot >= _params.mc_airspeed_min && _v_control_mode.flag_control_altitude_enabled) {
+	// 	_thrust_comp -= 1.0f/400.0f;	// reset if everything is ok
+	// }
+	// else {
+	// 	_thrust_comp = 0.0f;
+	// }
+	// // apply low pass filter to avoid noise
+	// _thrust_comp = math::constrain(_thrust_comp,0.0f,0.4f);
+	// _thrust_comp_filt = 0.00f*(_thrust_comp_filt - _thrust_comp) + _thrust_comp;
+	// _thrust_comp_filt = math::constrain(_thrust_comp_filt,0.0f,0.4f);
+	if(_airspeed_tot < _params.mc_airspeed_min && _v_control_mode.flag_control_altitude_enabled && _thrust_low_bound < 0.001f) {
+		_thrust_low_bound = _actuators_mc_in.control[3];
+	}
+	if(_actuators_mc_in.control[3] > _thrust_low_bound + 0.05f || !_v_control_mode.flag_control_altitude_enabled) {
+		_thrust_low_bound = 0.0f;
+	}
+}
+
 void
 VtolAttitudeControl::task_main_trampoline(int argc, char *argv[])
 {
@@ -774,7 +804,7 @@ void VtolAttitudeControl::task_main()
 	_local_pos_sub         = orb_subscribe(ORB_ID(vehicle_local_position));
 	_airspeed_sub          = orb_subscribe(ORB_ID(airspeed));
 	_battery_status_sub	   = orb_subscribe(ORB_ID(battery_status));
-
+	
 	_actuator_inputs_mc    = orb_subscribe(ORB_ID(actuator_controls_virtual_mc));
 	_actuator_inputs_fw    = orb_subscribe(ORB_ID(actuator_controls_virtual_fw));
 
@@ -863,6 +893,7 @@ void VtolAttitudeControl::task_main()
 
 				control_thrust_on_demand();
 				scale_mc_output();
+				limit_min_thrust();
 
 				fill_mc_att_control_output();
 				fill_mc_att_rates_sp();
