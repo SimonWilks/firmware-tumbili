@@ -215,77 +215,69 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 	_limits.throttle_upper = false;
 	_limits.throttle_lower = false;
 
-	/* perform initial mix pass yielding unbounded outputs, ignore yaw */
+	/* create vectors and matrix for convenient calculation */
+	Matrix<_rotor_count,4> M;
+	Vector<4> rpt = {roll,pitch,0,thrust};
+	Vector<4> y = {0.0f,0.0f,yaw,0.0f};
+	Vector<_rotor_count> out;
+	Vector<_rotor_count> out_yaw;
+
 	for (unsigned i = 0; i < _rotor_count; i++) {
-		float out = roll * _rotors[i].roll_scale +
-			    pitch * _rotors[i].pitch_scale +
-			    thrust;
-
-		out *= _rotors[i].out_scale;
-
-		/* calculate min and max output values */
-		if (out < min_out) {
-			min_out = out;
-		}
-		if (out > max_out) {
-			max_out = out;
-		}
-
-		outputs[i] = out;
+		M(i,0) = _rotors[i].roll_scale;
+		M(i,1) = _rotors[i].pitch_scale;
+		M(i,2) = _rotors[i].yaw_scale;
+		M(i,3) = 1.0f;
 	}
 
-	/* scale down roll/pitch controls if some outputs are negative, don't add yaw, keep total thrust */
-	if (min_out < 0.0f) {
-		float scale_in = thrust / (thrust - min_out);
+	/* do initial mixing without yaw */
+	out = M * rpt;
 
-		max_out = 0.0f;
+	bool ok = false;
+	float offset = 0.0f;
+	float scale = 1.0f;
+	float span;
 
-		/* mix again with adjusted controls */
-		for (unsigned i = 0; i < _rotor_count; i++) {
-			float out = scale_in * (roll * _rotors[i].roll_scale + pitch * _rotors[i].pitch_scale) + thrust;
+	while(!ok) {
+		float min = out.min();	// min output
+		float max = out.max();	// max output
+		span = max - min;
 
-			/*  adjust yaw if it will lead to negative output values */
-			if (out + yaw * _rotors[i].yaw_scale < 0.0f) {
-				yaw = -out / _rotors[i].yaw_scale;
+		/* check if only need to shift thrust*/
+		if(span <= 1.0f) {
+			// no need to scale just shift thrust value
+			if(min < 0.0f) {
+				offset = -min;
 			}
-
-			outputs[i] = out;
+			elseif(max > 1.0f) {
+				offset = max - 1.0f;
+			}
+			// apply thrust shifting
+			out += offset;
+			ok = true;
 		}
-		_limits.roll_pitch = true;
-	} else {
-		/* scale yaw if it caused output clipping */
-		for (unsigned i = 0; i < _rotor_count; i++) {
-			float out = roll * _rotors[i].roll_scale + pitch * _rotors[i].pitch_scale +
-				+ yaw * _rotors[i].yaw_scale + thrust;
-
-			if(out < 0.0f) {
-				yaw = -out / _rotors[i].yaw_scale;
-			}
+		else {
+			// our span is too large, scale and start again
+			scale = 1.0f/(max - min);
+			out *= scale;
 		}
 	}
 
-	/* now add yaw */
+	/*  now add yaw*/
+	out_yaw = M * y;
 	for (unsigned i = 0; i < _rotor_count; i++) {
-		outputs[i] += yaw * _rotors[i].yaw_scale;
-
-		/* update max output value */
-		if (outputs[i] > max_out) {
-			max_out = out;
+		if(out(i) + out_yaw(i) < 0) {
+			out_yaw *= -out(i)/out_yaw(i);
+		}
+		elseif(out(i) + out_yaw(i) > 1.0f) {
+			out_yaw *= (1.0f - out)/out_yaw(i);
 		}
 	}
 
-	/* scale down all outputs if some outputs are too large, reduce total thrust */
-	float scale_out;
-	if (max_out > 1.0f) {
-		scale_out = 1.0f / max_out;
-		_limits.throttle_upper = true;
-
-	} else {
-		scale_out = 1.0f;
-	}
+	out += out_yaw;
 
 	/* scale outputs to range _idle_speed..1, and do final limiting */
 	for (unsigned i = 0; i < _rotor_count; i++) {
+		outputs[i] = out(i);
 		if (outputs[i] < _idle_speed) {
 			_limits.throttle_lower = true;
 		}
