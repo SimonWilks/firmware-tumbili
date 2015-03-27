@@ -56,7 +56,7 @@
 
 namespace math
 {
-
+#include "../CMSIS/Include/arm_math.h"
 template<unsigned int M, unsigned int N>
 class __EXPORT Matrix;
 

@@ -139,6 +139,28 @@ public:
 	}
 
 	/**
+	 * get min value
+	 */
+	 float get_min() const {
+	 	float min = data[0];
+	 	for(unsigned i = 1; i < N; i++) {
+	 		min = data[i] < min ? data[i] : min;
+	 	}
+	 	return min;
+	 }
+
+	 /**
+	 * get max value
+	 */
+	 float get_max() const {
+	 	float max = data[0];
+	 	for(unsigned i = 1; i < N; i++) {
+	 		max = data[i] > max ? data[i] : max;
+	 	}
+	 	return max;
+	 }
+
+	/**
 	 * test for equality
 	 */
 	bool operator ==(const Vector<N> &v) const {
@@ -181,13 +203,25 @@ public:
 	}
 
 	/**
-	 * addition
+	 * addition of vector
 	 */
 	const Vector<N> operator +(const Vector<N> &v) const {
 		Vector<N> res;
 
 		for (unsigned int i = 0; i < N; i++)
 			res.data[i] = data[i] + v.data[i];
+
+		return res;
+	}
+
+	/**
+	 * addition of scalar
+	 */
+	const Vector<N> operator +(const float v) const {
+		Vector<N> res;
+
+		for (unsigned int i = 0; i < N; i++)
+			res.data[i] = data[i] + v;
 
 		return res;
 	}

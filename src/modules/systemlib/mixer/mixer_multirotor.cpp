@@ -52,6 +52,7 @@
 #include <math.h>
 #include <unistd.h>
 #include <math.h>
+#include <lib/mathlib/mathlib.h>
 
 #include "mixer.h"
 
@@ -207,8 +208,6 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 	float		yaw     = constrain(get_control(0, 2) * _yaw_scale, -1.0f, 1.0f);
 	float		thrust  = constrain(get_control(0, 3), 0.0f, 1.0f);
 	//lowsyslog("thrust: %d, get_control3: %d\n", (int)(thrust), (int)(get_control(0, 3)));
-	float		min_out = 0.0f;
-	float		max_out = 0.0f;
 
 	_limits.roll_pitch = false;
 	_limits.yaw = false;
@@ -216,11 +215,11 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 	_limits.throttle_lower = false;
 
 	/* create vectors and matrix for convenient calculation */
-	Matrix<_rotor_count,4> M;
-	Vector<4> rpt = {roll,pitch,0,thrust};
-	Vector<4> y = {0.0f,0.0f,yaw,0.0f};
-	Vector<_rotor_count> out;
-	Vector<_rotor_count> out_yaw;
+	math::Matrix<4,4> M;
+	math::Vector<4> rpt = {roll,pitch,0,thrust};
+	math::Vector<4> y = {0.0f,0.0f,yaw,0.0f};
+	math::Vector<4> out;
+	math::Vector<4> out_yaw;
 
 	for (unsigned i = 0; i < _rotor_count; i++) {
 		M(i,0) = _rotors[i].roll_scale;
@@ -234,12 +233,11 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 
 	bool ok = false;
 	float offset = 0.0f;
-	float scale = 1.0f;
 	float span;
 
 	while(!ok) {
-		float min = out.min();	// min output
-		float max = out.max();	// max output
+		float min = out.get_min();	// min output
+		float max = out.get_max();	// max output
 		span = max - min;
 
 		/* check if only need to shift thrust*/
@@ -248,17 +246,16 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 			if(min < 0.0f) {
 				offset = -min;
 			}
-			elseif(max > 1.0f) {
+			else if(max > 1.0f) {
 				offset = max - 1.0f;
 			}
 			// apply thrust shifting
-			out += offset;
+			out = out + offset;
 			ok = true;
 		}
 		else {
 			// our span is too large, scale and start again
-			scale = 1.0f/(max - min);
-			out *= scale;
+			out = out * 1.0f/(max - min);
 		}
 	}
 
@@ -268,8 +265,8 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 		if(out(i) + out_yaw(i) < 0) {
 			out_yaw *= -out(i)/out_yaw(i);
 		}
-		elseif(out(i) + out_yaw(i) > 1.0f) {
-			out_yaw *= (1.0f - out)/out_yaw(i);
+		else if(out(i) + out_yaw(i) > 1.0f) {
+			out_yaw *= (1.0f - out(i))/out_yaw(i);
 		}
 	}
 
@@ -281,7 +278,7 @@ MultirotorMixer::mix(float *outputs, unsigned space)
 		if (outputs[i] < _idle_speed) {
 			_limits.throttle_lower = true;
 		}
-		outputs[i] = constrain(_idle_speed + (outputs[i] * (1.0f - _idle_speed) * scale_out), _idle_speed, 1.0f);
+		outputs[i] = constrain(_idle_speed + (outputs[i] * (1.0f - _idle_speed)), _idle_speed, 1.0f);
 	}
 
 #if defined(CONFIG_ARCH_BOARD_PX4FMU_V1) || defined(CONFIG_ARCH_BOARD_PX4FMU_V2)
