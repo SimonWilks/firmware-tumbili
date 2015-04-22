@@ -327,6 +327,15 @@ int commander_main(int argc, char *argv[])
 				calib_ret = do_accel_calibration(mavlink_fd);
 			} else if (!strcmp(argv[2], "gyro")) {
 				calib_ret = do_gyro_calibration(mavlink_fd);
+			else if (!strcmp(argv[2], "esc")) {
+				// only allow if user has disconnected battery
+				if (battery.voltage_filtered_v < 3.0f) {
+					calib_ret = do_esc_calibration(mavlink_fd);
+				} else {
+					
+				}
+				
+			}
 			} else {
 				warnx("argument %s unsupported.", argv[2]);
 			}
@@ -2716,6 +2725,10 @@ void *commander_low_prio_loop(void *arg)
 						/* this always succeeds */
 						calib_ret = OK;
 
+					} else if ((int)(cmd.param4) == 1) {
+						/* do esc calibration */
+						answer_command(cmd,VEHICLE_CMD_RESULT_ACCEPTED);
+						calib_ret = do_esc_calibration(mavlink_fd);
 					}
 
 					if (calib_ret == OK) {
