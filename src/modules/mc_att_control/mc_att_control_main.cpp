@@ -784,7 +784,7 @@ MulticopterAttitudeControl::task_main()
 		perf_begin(_loop_perf);
 
 		/* run controller on attitude changes */
-		if (fds[0].revents & POLLIN) {
+		if (true) {
 			static uint64_t last_run = 0;
 			float dt = (hrt_absolute_time() - last_run) / 1000000.0f;
 			last_run = hrt_absolute_time();

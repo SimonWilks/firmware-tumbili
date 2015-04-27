@@ -39,6 +39,12 @@
 #pragma once
 
 #include <semaphore.h>
+#include <uORB/topics/sensor_combined.h>
+ #include <drivers/drv_accel.h>
+ #include <drivers/drv_gyro.h>
+ #include <drivers/drv_baro.h>
+ #include <drivers/drv_mag.h>
+#include <uORB/uORB.h>
 
 namespace simulator {
 
@@ -145,17 +151,24 @@ public:
 	bool getMPUReport(uint8_t *buf, int len);
 	bool getBaroSample(uint8_t *buf, int len);
 private:
-	Simulator() : _accel(1), _mpu(1), _baro(1) {}
+	Simulator() : _accel(1), _mpu(1), _baro(1), _accel_pub(-1), _baro_pub(-1), _gyro_pub(-1), _mag_pub(-1), _sensor_combined_pub(-1) {}
 	~Simulator() { _instance=NULL; }
 
 #ifndef __PX4_QURT
 	void updateSamples();
 #endif
+	void simulate_samples();
 
 	static Simulator *_instance;
 
 	simulator::Report<simulator::RawAccelData> 	_accel;
 	simulator::Report<simulator::RawMPUData>	_mpu;
 	simulator::Report<simulator::RawBaroData>	_baro;
+
+	orb_advert_t _accel_pub;
+	orb_advert_t _baro_pub;
+	orb_advert_t _gyro_pub;
+	orb_advert_t _mag_pub;
+	orb_advert_t _sensor_combined_pub;
 };
 

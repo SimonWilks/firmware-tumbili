@@ -38,6 +38,8 @@
 
 #include <px4_tasks.h>
 #include <systemlib/err.h>
+#include <stdint.h>
+#include <math.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -47,12 +49,15 @@
 #include <netinet/in.h>
 #endif
 #include "simulator.h"
+#include <drivers/drv_hrt.h>
+
 
 using namespace simulator;
 
 static px4_task_t g_sim_task = -1;
 
 Simulator *Simulator::_instance = NULL;
+
 
 Simulator *Simulator::getInstance()
 {
@@ -79,15 +84,76 @@ int Simulator::start(int argc, char *argv[])
 	int ret = 0;
 	_instance = new Simulator();
 	if (_instance) {
-#ifndef __PX4_QURT
-		_instance->updateSamples();
-#endif
+//#ifndef __PX4_QURT
+//		_instance->updateSamples();
+//#endif
+		_instance->simulate_samples();
 	}
 	else {
 		printf("Simulator creation failed\n");
 		ret = 1;
 	}
 	return ret;
+}
+
+void Simulator::simulate_samples() {
+
+	struct baro_report baro;
+	memset(&baro,0,sizeof(baro));
+	baro.pressure = 120000.0f;
+
+	// acceleration report
+	struct accel_report accel;
+	memset(&accel,0,sizeof(accel));
+	accel.z = 9.81f;
+	accel.range_m_s2 = 80.0f;
+
+	// gyro report
+	struct gyro_report gyro;
+	memset(&gyro, 0 ,sizeof(gyro));
+
+	// mag report
+	struct mag_report mag;
+	memset(&mag, 0 ,sizeof(mag));
+	// init publishers
+	_baro_pub = orb_advertise(ORB_ID(sensor_baro), &baro);
+	_accel_pub = orb_advertise(ORB_ID(sensor_accel), &accel);
+	_gyro_pub = orb_advertise(ORB_ID(sensor_gyro), &gyro);
+	_mag_pub = orb_advertise(ORB_ID(sensor_mag), &mag);
+
+	struct sensor_combined_s sensors;
+	memset(&sensors, 0, sizeof(sensors));
+	// fill sensors with some data
+	sensors.accelerometer_m_s2[2] = 9.81f;
+	sensors.magnetometer_ga[0] = 0.2f;
+	sensors.timestamp = hrt_absolute_time();
+	sensors.accelerometer_timestamp = hrt_absolute_time();
+	sensors.magnetometer_timestamp = hrt_absolute_time();
+	sensors.baro_timestamp = hrt_absolute_time();
+	// advertise
+	_sensor_combined_pub = orb_advertise(ORB_ID(sensor_combined), &sensors);
+
+
+	hrt_abstime time_last = hrt_absolute_time();
+	for(;;) {
+		if(hrt_absolute_time() - time_last > (uint64_t)1000000) {
+			time_last = hrt_absolute_time();
+			sensors.timestamp = hrt_absolute_time();
+			sensors.accelerometer_timestamp = hrt_absolute_time();
+			sensors.magnetometer_timestamp = hrt_absolute_time();
+			sensors.baro_timestamp = hrt_absolute_time();
+			baro.timestamp = hrt_absolute_time();
+			accel.timestamp = hrt_absolute_time();
+			gyro.timestamp = hrt_absolute_time();
+			mag.timestamp = hrt_absolute_time();
+			// publish the sensor values
+			orb_publish(ORB_ID(sensor_combined), _sensor_combined_pub, &sensors);
+			orb_publish(ORB_ID(sensor_baro), _baro_pub, &baro);
+			orb_publish(ORB_ID(sensor_accel), _accel_pub, &baro);
+			orb_publish(ORB_ID(sensor_gyro), _gyro_pub, &baro);
+			orb_publish(ORB_ID(sensor_mag), _mag_pub, &mag);
+		}
+	}
 }
 
 
@@ -119,6 +185,7 @@ void Simulator::updateSamples()
         }
 
         for (;;) {
+        		printf("waiting for data");
                 len = recvfrom(fd, buf, buflen, 0, (struct sockaddr *)&srcaddr, &addrlen);
                 if (len > 0) {
 			if (len == sizeof(RawMPUData)) {

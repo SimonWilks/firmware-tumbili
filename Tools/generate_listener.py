@@ -10,18 +10,24 @@ import sys
 raw_messages = glob.glob(sys.argv[1]+"/msg/*.msg")
 messages = []
 message_floats = []
+message_uint64 = []
 
 
 for index,m in enumerate(raw_messages):
-	temp_list = []
+	temp_list_floats = []
+	temp_list_uint64 = []
 	if("actuator_control" not in m and "pwm_input" not in m and "position_setpoint" not in m):
 		f = open(m,'r')
 		for line in f.readlines():
 			if(line.split(' ')[0] == "float32"):
-				temp_list.append(line.split(' ')[1].split('\t')[0].split('\n')[0])
+				temp_list_floats.append(line.split(' ')[1].split('\t')[0].split('\n')[0])
+			elif(line.split(' ')[0] == "uint64"):
+				temp_list_uint64.append(line.split(' ')[1].split('\t')[0].split('\n')[0])
+
 		f.close()
 		messages.append(m.split('/')[-1].split('.')[0])
-		message_floats.append(temp_list)
+		message_floats.append(temp_list_floats)
+		message_uint64.append(temp_list_uint64)
 num_messages = len(messages);
 
 print
@@ -76,6 +82,7 @@ print """
 #include <cstring>
 #include <uORB/uORB.h>
 #include <string.h>
+#include <stdint.h>
 """
 for m in messages:
 	print "#include <uORB/topics/%s.h>" % m
@@ -108,6 +115,8 @@ for index,m in enumerate(messages[1:]):
 	print "\t\t\torb_copy(ID,sub,&container);"
 	for item in message_floats[index+1]:
 		print "\t\t\tprintf(\"%s: %%f\\n \",container.%s);" % (item, item)
+	for item in message_uint64[index+1]:
+		print "\t\t\tprintf(\"%s: %%f\\n \",(float)container.%s);" % (item, item)
 	print "\t\t}"
 print "\t} else {"
 print "\t\t printf(\" Topic did not match any known topics\\n\");"

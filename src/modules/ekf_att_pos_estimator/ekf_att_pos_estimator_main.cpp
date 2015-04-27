@@ -538,13 +538,12 @@ void AttitudePositionEstimatorEKF::task_main()
 	_task_running = true;
 
 	while (!_task_should_exit) {
-
 		/* wait for up to 100ms for data */
 		int pret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 100);
 
 		/* timed out - periodic check for _task_should_exit, etc. */
 		if (pret == 0) {
-			continue;
+			//continue;
 		}
 
 		/* this is undesirable but not much we can do - might want to flag unhappy status */
@@ -567,8 +566,7 @@ void AttitudePositionEstimatorEKF::task_main()
 		}
 
 		/* only run estimator if gyro updated */
-		if (fds[1].revents & POLLIN) {
-
+		if (true) {//(fds[1].revents & POLLIN) {
 			/* check vehicle status for changes to publication state */
 			bool prev_hil = (_vstatus.hil_state == vehicle_status_s::HIL_STATE_ON);
 			vehicle_status_poll();
@@ -618,9 +616,20 @@ void AttitudePositionEstimatorEKF::task_main()
 			 *
 			 *    We run the filter only once all data has been fetched
 			 **/
-
+			 /*
+			if(!_baro_init) {
+				printf("baro");
+			}
+			if(!_gyro_valid) {
+				printf("gyro");
+			}
+			if(!_accel_valid) {
+				printf("accel");
+			}
+			if(!_mag_valid) {
+				printf("mag");
+			}*/
 			if (_baro_init && _gyro_valid && _accel_valid && _mag_valid) {
-
 				// maintain filtered baro and gps altitudes to calculate weather offset
 				// baro sample rate is ~70Hz and measurement bandwidth is high
 				// gps sample rate is 5Hz and altitude is assumed accurate when averaged over 30 seconds

@@ -472,6 +472,7 @@ ORBDevNode::appears_updated(SubscriberData *sd)
 	 * count, there has been no update from their perspective; if they
 	 * don't match then we might have a visible update.
 	 */
+
 	while (sd->generation != _generation) {
 
 		/*

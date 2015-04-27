@@ -304,6 +304,7 @@ int attitude_estimator_ekf_thread_main(int argc, char *argv[])
 		fds[1].fd = sub_params;
 		fds[1].events = POLLIN;
 		int ret = px4_poll(fds, 2, 1000);
+		printf("waiting for data");
 
 		if (ret < 0) {
 			/* XXX this is seriously bad - should be an emergency */
