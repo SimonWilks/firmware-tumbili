@@ -12,6 +12,7 @@ MODULES		+= drivers/rgbled
 MODULES		+= drivers/led
 MODULES		+= modules/sensors
 #MODULES		+= drivers/ms5611
+MODULES 	+= drivers/hil
 
 #
 # System commands
@@ -19,6 +20,7 @@ MODULES		+= modules/sensors
 MODULES	+= systemcmds/param
 MODULES += systemcmds/mixer
 MODULES += systemcmds/topic_listener
+MODULES += systemcmds/mixer
 
 #
 # General system control
@@ -60,10 +62,10 @@ MODULES		+= lib/conversion
 # Linux port
 #
 MODULES		+= platforms/posix/px4_layer
-MODULES		+= platforms/posix/drivers/accelsim
-MODULES		+= platforms/posix/drivers/gyrosim
-MODULES		+= platforms/posix/drivers/adcsim
-MODULES		+= platforms/posix/drivers/barosim
+#MODULES		+= platforms/posix/drivers/accelsim
+#MODULES		+= platforms/posix/drivers/gyrosim
+#MODULES		+= platforms/posix/drivers/adcsim
+#MODULES		+= platforms/posix/drivers/barosim
 MODULES		+= platforms/posix/drivers/tonealrmsim
 MODULES		+= platforms/posix/drivers/airspeedsim
 
